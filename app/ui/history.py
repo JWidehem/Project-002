@@ -55,5 +55,7 @@ class HistoryWindow(QDialog):
     def _delete_selected(self) -> None:
         row = self.list_widget.currentRow()
         if 0 <= row < len(self._entries):
-            entry_id = self._entries[row]["id"]
+            entry_id = self._entries[row].get("id")
+            if entry_id is None:
+                return
             self._on_delete(entry_id)
