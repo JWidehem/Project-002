@@ -59,3 +59,5 @@ class HistoryWindow(QDialog):
             if entry_id is None:
                 return
             self._on_delete(entry_id)
+            self._entries = [e for e in self._entries if e.get("id") != entry_id]
+            self.refresh(self._entries)

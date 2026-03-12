@@ -13,7 +13,7 @@ from PyQt6.QtWidgets import QApplication, QSystemTrayIcon
 from app.engine.paths import DATA_DIR
 from app.engine.state import AppState
 from app.engine.storage import Settings, History
-from app.engine.audio import AudioCapture
+from app.engine.audio import AudioCapture, SAMPLE_RATE
 from app.engine.transcription import Transcriber
 from app.engine.cleanup import clean
 from app.engine.injector import inject
@@ -142,6 +142,7 @@ class App:
                     glossary=self._settings.get("glossary", []),
                 )
                 if text:
+                    raw_text = text
                     text = clean(
                         text,
                         level=self._settings.get("cleanup_level", "light"),
@@ -149,7 +150,7 @@ class App:
                     )
                     inject(text)
                     self._history_store.save(
-                        raw=text, clean=text, duration=len(audio) / 16000
+                        raw=raw_text, clean=text, duration=len(audio) / SAMPLE_RATE
                     )
             except Exception as e:
                 logging.error(f"Transcription error: {e}")
@@ -173,6 +174,8 @@ class App:
 
     def _apply_settings(self, new_settings: dict) -> None:
         self._settings_store.save(new_settings)
+        if new_settings.get("model") != self._settings.get("model"):
+            self._transcriber = Transcriber(new_settings["model"])
         self._settings = new_settings
         self._hotkeys.configure(
             new_settings["hotkey_hold"],
