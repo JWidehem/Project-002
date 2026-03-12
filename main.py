@@ -4,10 +4,12 @@ import os
 import queue
 import sys
 import threading
+import warnings
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 import psutil
+from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QApplication, QSystemTrayIcon
 
 from app.engine.paths import DATA_DIR
@@ -27,6 +29,10 @@ LOCKFILE = DATA_DIR / "whisperflow.lock"
 
 
 def _setup_logging() -> None:
+    # Suppress noisy HuggingFace warnings about Windows symlinks
+    warnings.filterwarnings("ignore", message=".*symlinks.*", category=UserWarning)
+    warnings.filterwarnings("ignore", message=".*cache.*", category=FutureWarning)
+
     handler = RotatingFileHandler(
         DATA_DIR / "whisperflow.log",
         maxBytes=2 * 1024 * 1024,
@@ -39,6 +45,9 @@ def _setup_logging() -> None:
         datefmt="%Y-%m-%dT%H:%M:%S",
         handlers=[handler],
     )
+    # Silence verbose HTTP logs from huggingface_hub
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 
 def write_lockfile(data_dir: Path) -> None:
@@ -112,6 +121,10 @@ class App:
         if self._settings.get("preload_model"):
             self._transcriber._ensure_loaded()
 
+    def _notify(self, title: str, message: str) -> None:
+        """Thread-safe tray notification — posts to Qt main thread."""
+        QTimer.singleShot(0, lambda: self._tray.notify(title, message))
+
     def _on_max_duration(self) -> None:
         """Called from audio thread when 5min limit is reached."""
         self._stop_recording()
@@ -121,26 +134,40 @@ class App:
             return
         self._transcriber.reset_cancel()
         self._state.transition(AppState.RECORDING)
-        self._audio.start()
+        try:
+            self._audio.start()
+            logging.info("Recording started")
+        except Exception as e:
+            logging.error(f"Audio start error: {e}")
+            self._notify("WhisperFlow", f"Microphone error: {e}")
+            self._state.transition(AppState.IDLE)
 
     def _stop_recording(self) -> None:
         if self._state.current() != AppState.RECORDING:
             return
         audio = self._audio.stop()
         if audio is None:
+            logging.info("Recording discarded (too short < 300ms)")
+            self._notify("WhisperFlow", "Enregistrement trop court — maintenez la touche enfoncée")
             self._state.transition(AppState.IDLE)
             return
+        duration = len(audio) / SAMPLE_RATE
+        logging.info(f"Recording stopped: {duration:.1f}s of audio")
         self._state.transition(AppState.TRANSCRIBING)
         self._run_transcription(audio)
 
     def _run_transcription(self, audio) -> None:
         def _worker():
             try:
+                import numpy as np
+                rms = float(np.sqrt(np.mean(audio ** 2)))
+                logging.info(f"Transcription started — audio: {len(audio)} samples, RMS={rms:.4f}")
                 text = self._transcriber.transcribe(
                     audio,
                     language=self._settings["language"],
                     glossary=self._settings.get("glossary", []),
                 )
+                logging.info(f"Transcription result: {repr(text)}")
                 if text:
                     raw_text = text
                     text = clean(
@@ -152,8 +179,13 @@ class App:
                     self._history_store.save(
                         raw=raw_text, clean=text, duration=len(audio) / SAMPLE_RATE
                     )
+                    logging.info(f"Injected: {repr(text)}")
+                else:
+                    logging.warning("Transcription returned empty (no speech detected or cancelled)")
+                    self._notify("WhisperFlow", "Aucune parole détectée — vérifiez votre microphone")
             except Exception as e:
-                logging.error(f"Transcription error: {e}")
+                logging.error(f"Transcription error: {e}", exc_info=True)
+                self._notify("WhisperFlow", f"Erreur de transcription: {e}")
             finally:
                 if self._state.current() == AppState.TRANSCRIBING:
                     self._state.transition(AppState.IDLE)

@@ -37,3 +37,6 @@ class TrayIcon(QSystemTrayIcon):
             AppState.TRANSCRIBING: "Transcribing…",
         }
         self.setToolTip(f"WhisperFlow — {labels.get(new_state, new_state)}")
+
+    def notify(self, title: str, message: str) -> None:
+        self.showMessage(title, message, QSystemTrayIcon.MessageIcon.Information, 3000)

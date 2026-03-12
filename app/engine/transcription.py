@@ -45,6 +45,6 @@ class Transcriber:
         if self._model is None:
             self._model = WhisperModel(
                 self._model_name,
-                device="auto",
-                compute_type="auto",
+                device="cpu",
+                compute_type="int8",
             )
