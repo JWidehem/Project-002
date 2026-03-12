@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(py --version)",
+      "Bash(python3 -m pip --version)",
+      "Read(//c/Users/wideh/AppData/Local/Programs/**)",
+      "Bash(ls /c/Python*)",
+      "Read(//c/Users/wideh/miniconda3/**)",
+      "Read(//c/Users/wideh/anaconda3/**)",
+      "Read(//c/Users/wideh/**)",
+      "Read(//c/ProgramData/**)",
+      "Bash(echo $PATH)",
+      "Bash(/c/Users/wideh/AppData/Local/Programs/Antigravity/bin/antigravity --version)",
+      "Bash(cmd.exe /c \"where python 2>&1\")",
+      "Bash(powershell.exe -Command \"Get-Command python -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source\")",
+      "Bash(powershell.exe -Command \"python --version\")",
+      "Bash(powershell.exe -Command \"Get-ChildItem -Path ''C:\\\\'', ''D:\\\\'' -Filter ''python.exe'' -Recurse -ErrorAction SilentlyContinue -Depth 6 | Select-Object -ExpandProperty FullName\")",
+      "Bash(powershell.exe -Command \":*)"
+    ]
+  }
+}
