@@ -75,7 +75,17 @@ def check_single_instance(data_dir: Path) -> bool:
     if not psutil.pid_exists(pid):
         write_lockfile(data_dir)
         return True
-    return False  # another instance is running
+    # PID exists — verify it's actually a WhisperFlow/Python process,
+    # not a recycled PID from an unrelated process (common after crashes).
+    try:
+        proc_name = psutil.Process(pid).name().lower()
+        if "python" not in proc_name and "whisperflow" not in proc_name:
+            write_lockfile(data_dir)
+            return True
+    except (psutil.NoSuchProcess, psutil.AccessDenied):
+        write_lockfile(data_dir)
+        return True
+    return False  # another WhisperFlow instance is running
 
 
 def _remove_lockfile() -> None:
@@ -86,7 +96,7 @@ def _remove_lockfile() -> None:
 
 
 class App:
-    def __init__(self, qt_app: QApplication) -> None:
+    def __init__(self, qt_app: QApplication, transcriber: "Transcriber | None" = None) -> None:
         self._qt_app = qt_app
         self._settings_store = Settings(DATA_DIR)
         self._history_store = History(DATA_DIR)
@@ -96,7 +106,8 @@ class App:
         self._rms_queue: queue.Queue = queue.Queue(maxsize=60)
 
         self._audio = AudioCapture(self._rms_queue, on_max_duration=self._on_max_duration)
-        self._transcriber = Transcriber(self._settings["model"])
+        # Reuse pre-loaded transcriber if provided (MKL already initialized before Qt).
+        self._transcriber = transcriber or Transcriber(self._settings["model"])
 
         self._overlay = Overlay(self._rms_queue)
         self._tray = TrayIcon(
@@ -125,9 +136,6 @@ class App:
         self._hotkeys.start()
         if self._hotkeys.conflict_detected:
             logging.warning("Hotkey conflict detected on startup")
-
-        if self._settings.get("preload_model"):
-            self._transcriber._ensure_loaded()
 
     def _notify(self, title: str, message: str) -> None:
         """Thread-safe tray notification via pyqtSignal (works from any thread)."""
@@ -238,6 +246,8 @@ class App:
 
 def main() -> None:
     _setup_logging()
+    logging.info("Startup: logging initialized")
+
     if not check_single_instance(DATA_DIR):
         # Another instance running — show balloon and exit
         qt_app = QApplication(sys.argv)
@@ -249,14 +259,18 @@ def main() -> None:
     # Pre-initialize ctranslate2 (Intel MKL) BEFORE QApplication.
     # If WhisperModel initialises its thread pool after Qt starts, the two
     # frameworks' global thread state clash and cause a segfault.
+    logging.info("Startup: loading model before QApplication")
     _preload_settings = Settings(DATA_DIR).load()
     _preload_transcriber = Transcriber(_preload_settings["model"])
     _preload_transcriber._ensure_loaded()
+    logging.info("Startup: model loaded — starting Qt")
 
     atexit.register(_remove_lockfile)
     qt_app = QApplication(sys.argv)
     qt_app.setQuitOnLastWindowClosed(False)
-    App(qt_app)
+    # Pass the pre-loaded transcriber so App reuses it instead of creating
+    # a second WhisperModel instance (which would re-init MKL after Qt starts).
+    App(qt_app, transcriber=_preload_transcriber)
     sys.exit(qt_app.exec())
 
 
