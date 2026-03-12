@@ -9,8 +9,13 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 import psutil
-from PyQt6.QtCore import QTimer
+from PyQt6.QtCore import QObject, pyqtSignal
 from PyQt6.QtWidgets import QApplication, QSystemTrayIcon
+
+
+class _Notifier(QObject):
+    """QObject used solely to emit notifications cross-thread safely."""
+    notification = pyqtSignal(str, str)
 
 from app.engine.paths import DATA_DIR
 from app.engine.state import AppState
@@ -111,6 +116,9 @@ class App:
             self._settings["hotkey_toggle"],
         )
 
+        self._notifier = _Notifier()
+        self._notifier.notification.connect(self._tray.notify)
+
         self._state.state_changed.connect(self._overlay.on_state_change)
         self._state.state_changed.connect(self._tray.on_state_change)
 
@@ -122,8 +130,8 @@ class App:
             self._transcriber._ensure_loaded()
 
     def _notify(self, title: str, message: str) -> None:
-        """Thread-safe tray notification — posts to Qt main thread."""
-        QTimer.singleShot(0, lambda: self._tray.notify(title, message))
+        """Thread-safe tray notification via pyqtSignal (works from any thread)."""
+        self._notifier.notification.emit(title, message)
 
     def _on_max_duration(self) -> None:
         """Called from audio thread when 5min limit is reached."""
@@ -189,6 +197,7 @@ class App:
             finally:
                 if self._state.current() == AppState.TRANSCRIBING:
                     self._state.transition(AppState.IDLE)
+                logging.info("Worker thread finished")
         threading.Thread(target=_worker, daemon=True).start()
 
     def _cancel(self) -> None:
