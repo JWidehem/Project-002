@@ -246,6 +246,13 @@ def main() -> None:
         qt_app.quit()
         return
 
+    # Pre-initialize ctranslate2 (Intel MKL) BEFORE QApplication.
+    # If WhisperModel initialises its thread pool after Qt starts, the two
+    # frameworks' global thread state clash and cause a segfault.
+    _preload_settings = Settings(DATA_DIR).load()
+    _preload_transcriber = Transcriber(_preload_settings["model"])
+    _preload_transcriber._ensure_loaded()
+
     atexit.register(_remove_lockfile)
     qt_app = QApplication(sys.argv)
     qt_app.setQuitOnLastWindowClosed(False)
