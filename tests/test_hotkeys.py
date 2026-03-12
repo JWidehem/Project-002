@@ -14,7 +14,7 @@ def callbacks():
 
 @pytest.fixture
 def mgr(callbacks, mocker):
-    mocker.patch("pynput.keyboard.Listener")
+    mocker.patch("app.engine.hotkeys.kb.Listener")
     from app.engine.hotkeys import HotkeyManager
     m = HotkeyManager(**callbacks)
     m.configure("<ctrl>+<shift>+<space>", "<ctrl>+<shift>+d")
@@ -75,8 +75,8 @@ def test_toggle_when_transcribing_calls_on_cancel(mgr, callbacks, mock_state):
 
 def test_conflict_signal_set_on_listener_exception(callbacks, mocker):
     mocker.patch(
-        "pynput.keyboard.Listener",
-        side_effect=Exception("device access denied"),
+        "app.engine.hotkeys.kb.Listener",
+        side_effect=OSError("device access denied"),
     )
     from app.engine.hotkeys import HotkeyManager
     mgr = HotkeyManager(**callbacks)

@@ -23,7 +23,9 @@ def _parse_hotkey(hotkey_str: str) -> frozenset:
         part = part.strip()
         if part.startswith("<") and part.endswith(">"):
             name = part[1:-1]
-            keys.add(kb.Key[name] if hasattr(kb.Key, name) else kb.KeyCode.from_char(name))
+            if not hasattr(kb.Key, name):
+                raise ValueError(f"Unknown key: {part!r}")
+            keys.add(kb.Key[name])
         else:
             keys.add(kb.KeyCode.from_char(part))
     return frozenset(keys)
@@ -40,6 +42,7 @@ class HotkeyManager:
         self._toggle_keys: frozenset = frozenset()
         self._pressed: set = set()
         self._hold_active = False
+        self._lock = threading.Lock()
         self.conflict_detected = False
 
     def set_state(self, state: AppState) -> None:
@@ -58,15 +61,16 @@ class HotkeyManager:
                 on_release=self._on_release,
             )
             self._listener.start()
-        except Exception:
+        except (OSError, RuntimeError):
             self.conflict_detected = True
 
     def stop(self) -> None:
         if self._listener:
             self._listener.stop()
             self._listener = None
-        self._pressed.clear()
-        self._hold_active = False
+        with self._lock:
+            self._pressed.clear()
+            self._hold_active = False
 
     # --- Internal handlers ---
 
@@ -76,21 +80,29 @@ class HotkeyManager:
 
     def _on_press(self, key) -> None:
         key = self._canonical(key)
-        self._pressed.add(key)
-        current_set = frozenset(self._pressed)
+        with self._lock:
+            self._pressed.add(key)
+            current_set = frozenset(self._pressed)
+            hold_triggered = current_set == self._hold_keys and not self._hold_active
+            toggle_triggered = not hold_triggered and current_set == self._toggle_keys
+            if hold_triggered:
+                self._hold_active = True
 
-        if current_set == self._hold_keys and not self._hold_active:
-            self._hold_active = True
+        if hold_triggered:
             self._on_hold_press()
-        elif current_set == self._toggle_keys:
+        elif toggle_triggered:
             self._on_toggle_press()
 
     def _on_release(self, key) -> None:
         key = self._canonical(key)
-        if self._hold_active and key in self._hold_keys:
-            self._hold_active = False
+        with self._lock:
+            release_hold = self._hold_active and key in self._hold_keys
+            if release_hold:
+                self._hold_active = False
+            self._pressed.discard(key)
+
+        if release_hold:
             self._on_hold_release()
-        self._pressed.discard(key)
 
     def _on_hold_press(self) -> None:
         self._on_start()
