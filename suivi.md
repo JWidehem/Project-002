@@ -1,7 +1,7 @@
-# WhisperFlow — Suivi de projet
+﻿# WhisperFlow — Suivi de projet
 
-> Document de passation destiné à un agent LLM prenant le relais.
-> Dernière mise à jour : 2026-03-12
+> Document de passation destiné à un agent LLM prenant le relais.  
+> Dernière mise à jour : 2026-03-13 — **v1 livrée, stable**
 
 ---
 
@@ -9,17 +9,18 @@
 
 Application desktop Windows de dictée vocale locale. L'utilisateur parle, le texte est transcrit et injecté dans le champ actif — sans cloud, sans LLM, sans écoute permanente.
 
-**Lancement :** `python main.py`
+**Lancement :** `pythonw main.py` (sans console) ou `python main.py` (debug)
 
 ---
 
-## État actuel : MVP fonctionnel, en attente de smoke test manuel
+## État : v1 stable ✅
 
-- [x] Tous les composants implementés (engine + UI)
-- [x] 72 tests, 100% passants (`pytest tests/ -v`)
-- [x] Branche `feat/implementation` mergée sur `main`
-- [ ] **Smoke test manuel** — à faire (voir section ci-dessous)
-- [ ] Packaging PyInstaller — non prévu dans le MVP, à décider ensuite
+- [x] Tous les composants engine + UI implémentés
+- [x] Tests unitaires, 100% passants (`pytest tests/ -v`)
+- [x] Smoke test manuel validé — dictée, injection, historique, réglages OK
+- [x] Icônes `assets/logo.png` + `assets/logo.ico` présentes
+- [x] Raccourci bureau configuré (`WhisperFlow.lnk` → `pythonw main.py`, icône logo, WindowStyle=7)
+- [x] Démarrage automatique Windows optionnel (registre HKCU)
 
 ---
 
@@ -27,13 +28,13 @@ Application desktop Windows de dictée vocale locale. L'utilisateur parle, le te
 
 ```
 Process unique
-├── Thread Qt main   → overlay, tray, settings, history
-├── Thread hotkey    → pynput GlobalHotKeys listener
-├── Thread audio     → sounddevice InputStream → buffer PCM
+├── Thread Qt main   → main_window, overlay, tray, history, settings
+├── Thread hotkey    → pynput Listener (hold + toggle avec timer différé)
+├── Thread audio     → sounddevice InputStream 16kHz mono → buffer PCM
 └── Thread ASR       → faster-whisper (lazy-loaded, gardé en mémoire)
 ```
 
-Communication inter-threads : `queue.Queue` + signaux Qt (`pyqtSignal`). Pas de partage d'état direct.
+Communication inter-threads : `queue.Queue` + signaux Qt (`pyqtSignal`). Aucun partage d'état direct.
 
 ---
 
@@ -41,37 +42,37 @@ Communication inter-threads : `queue.Queue` + signaux Qt (`pyqtSignal`). Pas de 
 
 ```
 D:\Project-002\
-├── main.py                        # Entry point : DI, lockfile, pipeline
+├── main.py                     # Entry point : DI, lockfile, orchestration
 ├── requirements.txt
 ├── pytest.ini
+├── suivi.md                    # ce fichier
 ├── app/
 │   ├── engine/
-│   │   ├── paths.py               # DATA_DIR (dev vs packaged)
-│   │   ├── state.py               # AppState + machine d'états Qt
-│   │   ├── storage.py             # settings.json + history.db (SQLite)
-│   │   ├── cleanup.py             # post-traitement texte (3 niveaux)
-│   │   ├── injector.py            # clipboard + Ctrl+V, fallback keyboard.type
-│   │   ├── audio.py               # sounddevice 16kHz mono, RMS queue
-│   │   ├── transcription.py       # faster-whisper wrapper, cancel, glossaire
-│   │   ├── hotkeys.py             # GlobalHotKeys hold/toggle, détection conflit
-│   │   └── autostart.py           # registre Windows HKCU\...\Run
+│   │   ├── paths.py            # DATA_DIR (dev vs packaged)
+│   │   ├── state.py            # AppState : IDLE / RECORDING / TRANSCRIBING
+│   │   ├── storage.py          # settings.json + history.db (SQLite)
+│   │   ├── cleanup.py          # post-traitement texte (none / light / medium)
+│   │   ├── injector.py         # clipboard + Ctrl+V, fallback keyboard.type
+│   │   ├── audio.py            # sounddevice, RMS queue
+│   │   ├── transcription.py    # faster-whisper, cancel event, glossaire
+│   │   ├── hotkeys.py          # hold + toggle avec timer différé (350 ms)
+│   │   └── autostart.py        # registre Windows
 │   └── ui/
-│       ├── overlay.py             # fenêtre frameless RMS + transcribing
-│       ├── tray.py                # icône tray + menu contextuel
-│       ├── settings.py            # 5 sections : général, hotkeys, modèle, nettoyage, glossaire
-│       └── history.py             # liste anti-chrono, copier/supprimer
-├── tests/                         # 72 tests unitaires
-├── data/                          # créé au 1er lancement (gitignored)
-│   ├── settings.json
-│   ├── history.db
-│   ├── whisperflow.log
-│   └── whisperflow.lock
+│       ├── theme.py            # QSS + constantes couleurs gold
+│       ├── main_window.py      # fenêtre principale frameless (bento home, onglets)
+│       ├── overlay.py          # indicateur d'enregistrement (bottom-center, or)
+│       ├── tray.py             # icône tray + menu contextuel
+│       ├── settings.py         # réglages (général, hotkeys, modèle, nettoyage, glossaire)
+│       └── history.py          # historique anti-chrono, copier/supprimer
+├── tests/                      # tests unitaires (pytest)
 ├── assets/
-│   └── icon.png                   # ⚠ À créer — l'app démarre sans, mais le tray est vide
-└── docs/
-    └── superpowers/
-        ├── specs/2026-03-12-whisperflow-local-design.md   # spec complète
-        └── plans/2026-03-12-whisperflow-local.md          # plan d'implémentation
+│   ├── logo.png                # 256×256 PNG
+│   └── logo.ico                # ICO multi-résolution (16/32/48/256)
+└── data/                       # créé au 1er lancement (gitignored)
+    ├── settings.json
+    ├── history.db
+    ├── whisperflow.log
+    └── whisperflow.lock
 ```
 
 ---
@@ -80,12 +81,28 @@ D:\Project-002\
 
 ```
 IDLE ──(hotkey)──► RECORDING ──(stop)──► TRANSCRIBING ──(done)──► IDLE
-                       │                      │
-                    (Escape/error)         (Escape/toggle/error)
-                       └──────────────────────► IDLE
+                       │                       │
+                   (Escape/cancel)         (Escape/cancel)
+                       └───────────────────────► IDLE
 ```
 
 Toute transition non listée lève `ValueError`. Implémenté dans `app/engine/state.py`.
+
+---
+
+## Hotkeys — logique clé
+
+Deux raccourcis configurables indépendamment dans les réglages.
+
+| Mode                      | Raccourci défaut     | Comportement                                         |
+| ------------------------- | -------------------- | ---------------------------------------------------- |
+| **Hold** (push-to-talk)   | `Ctrl + Alt`         | Maintenir pour enregistrer, relâcher pour transcrire |
+| **Toggle** (mains libres) | `Ctrl + Alt + Space` | Appuyer pour démarrer, réappuyer pour transcrire     |
+
+**Cas superset** (toggle ⊃ hold, ex. Ctrl+Alt vs Ctrl+Alt+Space) :  
+Un timer différé de 350 ms est lancé dès que les touches hold sont pressées. Si Space arrive dans ce délai → mode toggle. Sinon → mode hold. Une fois un mode actif, l'autre est ignoré (`_hold_active` / `_toggle_active` mutuellement exclusifs).
+
+`Escape` annule immédiatement l'enregistrement ou la transcription en cours, sans injection.
 
 ---
 
@@ -94,9 +111,9 @@ Toute transition non listée lève `ValueError`. Implémenté dans `app/engine/s
 ```
 1. Hotkey → state.transition(RECORDING)
 2. sounddevice stream → chunks PCM accumulés en RAM
-3. Overlay visible + visualiseur RMS ~30fps
+3. Overlay visible (barres RMS animées, palette or)
 4. Hotkey relâchée (hold) ou re-pressée (toggle) → state.transition(TRANSCRIBING)
-   └── si durée < 300ms → discard silencieux → IDLE
+   └── si durée < 300 ms → discard silencieux → IDLE
 5. np.concatenate(chunks) → faster-whisper.transcribe()
    └── si Escape pendant transcription → cancel event → IDLE, pas d'injection
 6. cleanup(texte) selon niveau configuré
@@ -109,98 +126,71 @@ Toute transition non listée lève `ValueError`. Implémenté dans `app/engine/s
 
 ## Paramètres configurables (settings.json)
 
-| Clé | Défaut | Description |
-|-----|--------|-------------|
-| `language` | `"fr"` | Langue Whisper |
-| `model` | `"small"` | Modèle faster-whisper |
-| `preload_model` | `false` | Charger le modèle au démarrage |
-| `hotkey_hold` | `"<ctrl>+<shift>+<space>"` | Hotkey mode hold |
-| `hotkey_toggle` | `"<ctrl>+<shift>+d"` | Hotkey mode toggle |
-| `cleanup_level` | `"light"` | `"none"` / `"light"` / `"medium"` |
-| `filler_words` | `["euh", "hum", ...]` | Mots parasites supprimés |
-| `glossary` | `[]` | Mots passés en `initial_prompt` à Whisper |
-| `autostart` | `false` | Clé registre Windows au démarrage |
-
----
-
-## Smoke test à faire
-
-Le smoke test n'a pas encore été réalisé. Voici la procédure :
-
-```bash
-# 1. Depuis D:\Project-002 avec l'environnement Python activé
-python main.py
-```
-
-**Vérifications à effectuer :**
-
-1. **Démarrage** — L'icône WhisperFlow apparaît dans le tray (grise)
-2. **Hotkey hold** — `Ctrl+Shift+Space` → overlay apparaît, icône rouge, barres RMS animées
-3. **Relâche** — Overlay passe en "Transcription…", icône orange, puis disparaît
-4. **Injection** — Le texte dicté s'insère dans le champ actif (tester dans Notepad ou un navigateur)
-5. **Escape** — Presser Escape pendant l'enregistrement ou la transcription → retour IDLE sans injection
-6. **Réglages** — Clic droit tray → Réglages → modifier une option → sauvegarder
-7. **Historique** — Clic droit tray → Historique → vérifier les entrées, copier, supprimer
-8. **Durée courte** — Appuyer et relâcher immédiatement la hotkey → pas de transcription (< 300ms)
-9. **Instance double** — Lancer `python main.py` une 2e fois → notification ballon "déjà en cours", exit
-
-**Points de vigilance connus :**
-
-- `assets/icon.png` n'existe pas encore — à créer (16×16 ou 32×32 PNG) pour éviter un tray vide
-- Le modèle Whisper `small` se télécharge (~460 MB) au premier appel → un dialog de progression s'affiche
-- L'injection via clipboard peut rater dans des applis très lentes (Electron lourd) — comportement attendu et documenté
+| Clé              | Défaut                   | Description                                |
+| ---------------- | ------------------------ | ------------------------------------------ |
+| `language`       | `"fr"`                   | Langue Whisper                             |
+| `model`          | `"small"`                | Modèle faster-whisper                      |
+| `compute_device` | `"cpu"`                  | `"cpu"` ou `"cuda"`                        |
+| `preload_model`  | `false`                  | Charger le modèle au démarrage             |
+| `hotkey_hold`    | `"<ctrl>+<alt>"`         | Raccourci mode hold                        |
+| `hotkey_toggle`  | `"<ctrl>+<alt>+<space>"` | Raccourci mode toggle                      |
+| `cleanup_level`  | `"light"`                | `"none"` / `"light"` / `"medium"`          |
+| `filler_words`   | `["euh", "hum", ...]`    | Mots parasites supprimés                   |
+| `glossary`       | `[]`                     | Mots passés en `initial_prompt` à Whisper  |
+| `autostart`      | `false`                  | Démarrage automatique Windows              |
+| `audio_device`   | `null`                   | Périphérique audio (null = défaut système) |
 
 ---
 
 ## Points techniques notables
 
-### Injection texte (`injector.py`)
-Stratégie : copie dans clipboard → Ctrl+V → restauration clipboard après 100ms. Si pyperclip échoue (exception), fallback `keyboard.type()` caractère par caractère.
+### Fenêtre principale (`main_window.py`)
 
-### Annulation pendant TRANSCRIBING
-Un `threading.Event` est passé au thread ASR. Si Escape ou le toggle hotkey est pressé pendant `transcribe()`, l'event est activé. Le thread ASR vérifie après `transcribe()` et abandonne le résultat.
+Fenêtre frameless (`Qt.FramelessWindowHint`), fond opaque sombre (`_USE_ACRYLIC = False` — la transparence DWM causait du lag au drag). Déplacement via `nativeEvent` → `WM_NCHITTEST` → `HTCAPTION` sur la barre de titre. Interface en 4 onglets : **Accueil** (bento : bienvenue + activité + tuiles navigation), **Historique**, **Réglages**, Performances (placeholder).
+
+### Overlay (`overlay.py`)
+
+Fenêtre `Tool | FramelessWindowHint | WindowStaysOnTopHint`, positionnée en bas-centre. Palette entièrement or (`#E8C96A` / `#C9A84C`). Trois états visuels : point clignotant (IDLE caché), barres RMS (RECORDING), arc spinner (TRANSCRIBING).
+
+### Injection texte (`injector.py`)
+
+Clipboard → Ctrl+V → restauration clipboard après 100 ms. Fallback `keyboard.type()` si pyperclip échoue.
 
 ### Modèle Whisper
-Chargé lazily au premier usage, gardé en RAM pour toute la session. Si le modèle n'est pas en cache (`~/.cache/huggingface/`), un dialog bloquant avec barre de progression s'affiche.
 
-### Hotkey listener
-Recréé à chaque changement de réglages. La détection de conflit est réalisée au démarrage du listener (si pynput lève une exception) → badge `⚠ Conflit détecté` dans les réglages.
+Chargé lazily au premier usage, gardé en RAM pour toute la session. Premier lancement : téléchargement ~460 MB (modèle `small`), dialog de progression affiché.
 
 ### Lockfile
-Format : PID ASCII dans `data/whisperflow.lock`. Vérifié via `psutil.pid_exists()` au démarrage. Supprimé à l'arrêt via `atexit`.
+
+PID ASCII dans `data/whisperflow.lock`. Vérifié via `psutil.pid_exists()` au démarrage. Supprimé à l'arrêt via `atexit`.
 
 ---
 
-## Prochaines étapes possibles (hors MVP)
+## Prochaines étapes possibles (post-v1)
 
-- Packaging PyInstaller (`.exe` standalone)
-- Icône tray animée pendant la transcription
+- Packaging PyInstaller (`.exe` standalone, sans Python requis)
+- Onglet Performances avec graphiques de sessions
 - Recherche dans l'historique
-- Support multi-langues dans l'UI (actuellement tout en français)
-- Tests d'intégration end-to-end (avec sounddevice mocké et Whisper mocké)
+- Support GPU (CUDA) pour transcription plus rapide
+- Tests d'intégration end-to-end
 
 ---
 
 ## Commandes utiles
 
 ```bash
-# Lancer l'app
+# Lancer l'app (avec console pour debug)
 python main.py
+
+# Lancer sans console (mode production)
+pythonw main.py
 
 # Tests
 pytest tests/ -v --tb=short
 
-# Tests d'un module spécifique
-pytest tests/test_state.py -v
-
-# Voir les données
-ls data/
+# Tuer + relancer proprement (PowerShell)
+Stop-Process -Name python,pythonw -Force -EA SilentlyContinue
+Start-Sleep 1
+Remove-Item data\whisperflow.lock, data\whisperflow.show -EA SilentlyContinue
+pythonw main.py
 ```
-
----
-
-## Références
-
-- Spec complète : `docs/superpowers/specs/2026-03-12-whisperflow-local-design.md`
-- Plan d'implémentation : `docs/superpowers/plans/2026-03-12-whisperflow-local.md`
-- Stack : Python 3.11+, PyQt6, faster-whisper, sounddevice, pynput, pyperclip, keyboard, psutil

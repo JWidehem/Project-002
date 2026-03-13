@@ -9,7 +9,15 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 import psutil
+
+# ctranslate2 / Intel MKL DLLs MUST be loaded before PyQt6 DLLs on Windows.
+# If Qt initialises its thread infrastructure first, MKL's own thread-pool
+# startup causes an access violation (0xC0000005).  Importing Transcriber here
+# pulls in faster-whisper → ctranslate2 → MKL before any Qt code is loaded.
+from app.engine.transcription import Transcriber  # noqa: E402 (intentional early import)
+
 from PyQt6.QtCore import QObject, pyqtSignal
+from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import QApplication, QSystemTrayIcon
 
 
@@ -21,7 +29,6 @@ from app.engine.paths import DATA_DIR
 from app.engine.state import AppState
 from app.engine.storage import Settings, History
 from app.engine.audio import AudioCapture, SAMPLE_RATE
-from app.engine.transcription import Transcriber
 from app.engine.cleanup import clean
 from app.engine.injector import inject
 from app.engine.hotkeys import HotkeyManager
@@ -29,6 +36,7 @@ from app.ui.overlay import Overlay
 from app.ui.tray import TrayIcon
 from app.ui.settings import SettingsWindow
 from app.ui.history import HistoryWindow
+from app.ui.main_window import MainWindow
 
 LOCKFILE = DATA_DIR / "whisperflow.lock"
 
@@ -67,25 +75,26 @@ def read_lockfile_pid(data_dir: Path) -> int | None:
 
 
 def check_single_instance(data_dir: Path) -> bool:
-    """Return True if safe to start, False if already running."""
+    """Return True if safe to start, False if already running.
+
+    Writes the PID lockfile atomically when claiming the slot.
+    """
     pid = read_lockfile_pid(data_dir)
-    if pid is None:
-        write_lockfile(data_dir)
-        return True
-    if not psutil.pid_exists(pid):
-        write_lockfile(data_dir)
-        return True
-    # PID exists — verify it's actually a WhisperFlow/Python process,
-    # not a recycled PID from an unrelated process (common after crashes).
-    try:
-        proc_name = psutil.Process(pid).name().lower()
-        if "python" not in proc_name and "whisperflow" not in proc_name:
-            write_lockfile(data_dir)
-            return True
-    except (psutil.NoSuchProcess, psutil.AccessDenied):
-        write_lockfile(data_dir)
-        return True
-    return False  # another WhisperFlow instance is running
+    if pid is not None and pid != os.getpid():
+        # Verify the stored PID is still a live WhisperFlow/Python process
+        alive = False
+        try:
+            if psutil.pid_exists(pid):
+                proc_name = psutil.Process(pid).name().lower()
+                if "python" in proc_name or "whisperflow" in proc_name:
+                    alive = True
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
+        if alive:
+            return False  # another WhisperFlow instance is genuinely running
+    # No live instance found — claim the lockfile
+    write_lockfile(data_dir)
+    return True
 
 
 def _remove_lockfile() -> None:
@@ -105,12 +114,28 @@ class App:
         self._state = AppState()
         self._rms_queue: queue.Queue = queue.Queue(maxsize=60)
 
-        self._audio = AudioCapture(self._rms_queue, on_max_duration=self._on_max_duration)
+        self._audio = AudioCapture(
+            self._rms_queue,
+            on_max_duration=self._on_max_duration,
+            device=self._settings.get("audio_device"),
+        )
         # Reuse pre-loaded transcriber if provided (MKL already initialized before Qt).
-        self._transcriber = transcriber or Transcriber(self._settings["model"])
+        self._transcriber = transcriber or Transcriber(
+            self._settings["model"],
+            compute_device=self._settings.get("compute_device", "cpu"),
+        )
 
         self._overlay = Overlay(self._rms_queue)
+
+        self._main_window = MainWindow(
+            settings=self._settings,
+            on_save_settings=self._apply_settings,
+            history_store=self._history_store,
+            on_record_toggle=self._toggle_recording,
+        )
+
         self._tray = TrayIcon(
+            on_open=self._main_window.show_and_raise,
             on_history=self._show_history,
             on_settings=self._show_settings,
             on_quit=qt_app.quit,
@@ -132,6 +157,7 @@ class App:
 
         self._state.state_changed.connect(self._overlay.on_state_change)
         self._state.state_changed.connect(self._tray.on_state_change)
+        self._state.state_changed.connect(self._main_window.update_state)
 
         self._hotkeys.start()
         if self._hotkeys.conflict_detected:
@@ -140,6 +166,15 @@ class App:
     def _notify(self, title: str, message: str) -> None:
         """Thread-safe tray notification via pyqtSignal (works from any thread)."""
         self._notifier.notification.emit(title, message)
+
+    def _toggle_recording(self) -> None:
+        """Called from the UI dictation button — toggle start/stop."""
+        state = self._state.current()
+        if state == AppState.IDLE:
+            self._start_recording()
+        elif state == AppState.RECORDING:
+            self._stop_recording()
+        # TRANSCRIBING: ignore (button is disabled anyway)
 
     def _on_max_duration(self) -> None:
         """Called from audio thread when 5min limit is reached."""
@@ -223,9 +258,16 @@ class App:
 
     def _apply_settings(self, new_settings: dict) -> None:
         self._settings_store.save(new_settings)
-        if new_settings.get("model") != self._settings.get("model"):
-            self._transcriber = Transcriber(new_settings["model"])
+        if new_settings.get("model") != self._settings.get("model") \
+                or new_settings.get("compute_device") != self._settings.get("compute_device"):
+            self._transcriber = Transcriber(
+                new_settings["model"],
+                compute_device=new_settings.get("compute_device", "cpu"),
+            )
+        if new_settings.get("audio_device") != self._settings.get("audio_device"):
+            self._audio.set_device(new_settings.get("audio_device"))
         self._settings = new_settings
+        self._main_window.update_settings(new_settings)
         self._hotkeys.configure(
             new_settings["hotkey_hold"],
             new_settings["hotkey_toggle"],
@@ -234,7 +276,7 @@ class App:
         # Wire autostart (imported late to avoid circular issues)
         from app.engine.autostart import enable_autostart, disable_autostart
         if new_settings.get("autostart"):
-            enable_autostart(sys.executable)
+            enable_autostart()  # path resolved inside autostart.py
         else:
             disable_autostart()
 
@@ -244,35 +286,114 @@ class App:
         win.exec()
 
 
+def _repair_shortcut() -> None:
+    """Keep the desktop shortcut pointing at pythonw.exe (no console window)."""
+    if sys.platform != "win32":
+        return
+    try:
+        from pathlib import Path as _Path
+        import subprocess
+        pythonw = _Path(sys.executable).parent / "pythonw.exe"
+        if not pythonw.exists():
+            return
+        script = str(_Path(__file__).resolve())
+        wdir = str(_Path(__file__).parent)
+        ico = _Path(__file__).parent / "assets" / "logo.ico"
+        ico_line = f'$lnk.IconLocation = "{ico},0"' if ico.exists() else ""
+        ps = (
+            f'$sh = New-Object -ComObject WScript.Shell; '
+            f'$d = $sh.SpecialFolders("Desktop"); '
+            f'$lnk = $sh.CreateShortcut("$d\\WhisperFlow.lnk"); '
+            f'$lnk.TargetPath = "{pythonw}"; '
+            f'$lnk.Arguments = \'"{script}"\'; '
+            f'$lnk.WorkingDirectory = "{wdir}"; '
+            f'$lnk.WindowStyle = 7; '
+            f'{ico_line} '
+            f'$lnk.Save()'
+        )
+        subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
+            capture_output=True, timeout=5
+        )
+    except Exception as e:
+        logging.debug(f"Shortcut repair skipped: {e}")
+
+
 def main() -> None:
     _setup_logging()
     logging.info("Startup: logging initialized")
 
     if not check_single_instance(DATA_DIR):
-        # Another instance running — show balloon and exit
-        qt_app = QApplication(sys.argv)
-        tray = TrayIcon(on_history=qt_app.quit, on_settings=qt_app.quit, on_quit=qt_app.quit)
-        tray.showMessage("WhisperFlow", "Already running.", QSystemTrayIcon.MessageIcon.Information, 2000)
-        qt_app.quit()
+        # Another instance is running — write a signal file so it opens its window
+        signal_file = DATA_DIR / "whisperflow.show"
+        signal_file.touch()
+        logging.info("Second instance: wrote show-signal, exiting")
         return
 
-    # Pre-initialize ctranslate2 (Intel MKL) BEFORE QApplication.
-    # If WhisperModel initialises its thread pool after Qt starts, the two
-    # frameworks' global thread state clash and cause a segfault.
-    logging.info("Startup: loading model before QApplication")
+    # Silently keep the desktop shortcut pointing at pythonw.exe
+    _repair_shortcut()
+
+    # ctranslate2/MKL DLLs are already loaded (via the early Transcriber
+    # import at the top of this file).  The model is loaded here, before
+    # QApplication, so MKL's thread pool is fully initialised before Qt
+    # starts its own threading infrastructure.
+    logging.info("Startup: loading model")
     _preload_settings = Settings(DATA_DIR).load()
-    _preload_transcriber = Transcriber(_preload_settings["model"])
+    _preload_transcriber = Transcriber(
+        _preload_settings["model"],
+        compute_device=_preload_settings.get("compute_device", "cpu"),
+    )
     _preload_transcriber._ensure_loaded()
     logging.info("Startup: model loaded — starting Qt")
 
     atexit.register(_remove_lockfile)
     qt_app = QApplication(sys.argv)
+    qt_app.setStyle("Fusion")   # consistent QSS rendering on Windows
     qt_app.setQuitOnLastWindowClosed(False)
-    # Pass the pre-loaded transcriber so App reuses it instead of creating
-    # a second WhisperModel instance (which would re-init MKL after Qt starts).
-    App(qt_app, transcriber=_preload_transcriber)
+
+    # Set Windows AppUserModelID so the taskbar shows our icon, not Python's
+    try:
+        import ctypes
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("WhisperFlow.App.1.0")
+    except Exception:
+        pass
+    _ico = Path(__file__).parent / "assets" / "logo.ico"
+    if _ico.exists():
+        qt_app.setWindowIcon(QIcon(str(_ico)))
+    elif (Path(__file__).parent / "assets" / "logo.png").exists():
+        qt_app.setWindowIcon(QIcon(str(Path(__file__).parent / "assets" / "logo.png")))
+
+    try:
+        app = App(qt_app, transcriber=_preload_transcriber)
+    except Exception:
+        logging.critical("Fatal error during App.__init__", exc_info=True)
+        sys.exit(1)
+
+    # Show the main window immediately on first launch
+    app._main_window.show_and_raise()
+
+    # Poll for show-window signal from a second instance
+    _show_signal = DATA_DIR / "whisperflow.show"
+    _show_signal.unlink(missing_ok=True)  # clear any leftover
+    from PyQt6.QtCore import QTimer as _QTimer
+    _poll = _QTimer()
+    def _check_show_signal():
+        if _show_signal.exists():
+            try:
+                _show_signal.unlink(missing_ok=True)
+            except Exception:
+                pass
+            app._main_window.show_and_raise()
+    _poll.timeout.connect(_check_show_signal)
+    _poll.start(500)  # check every 500ms
+
     sys.exit(qt_app.exec())
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception:
+        import logging as _log
+        _log.critical("Unhandled exception in main()", exc_info=True)
+        sys.exit(1)

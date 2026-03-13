@@ -5,13 +5,15 @@ from pathlib import Path
 DEFAULTS: dict = {
     "language": "fr",
     "model": "small",
+    "compute_device": "cpu",
     "preload_model": False,
-    "hotkey_hold": "<ctrl>+<shift>+<space>",
-    "hotkey_toggle": "<ctrl>+<shift>+d",
+    "hotkey_hold": "<ctrl>+<alt>",
+    "hotkey_toggle": "<ctrl>+<alt>+<space>",
     "cleanup_level": "light",
     "filler_words": ["euh", "hum", "ben", "voilà", "enfin"],
     "glossary": [],
     "autostart": False,
+    "audio_device": None,
 }
 
 MAX_HISTORY = 500

@@ -1,18 +1,17 @@
 from PyQt6.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QListWidget, QListWidgetItem,
+    QDialog, QWidget, QVBoxLayout, QHBoxLayout, QListWidget, QListWidgetItem,
     QPushButton, QLabel,
 )
 from PyQt6.QtCore import Qt
 import pyperclip
+from app.ui import theme
 
 
-class HistoryWindow(QDialog):
+class HistoryWidget(QWidget):
     def __init__(self, entries: list[dict], on_delete) -> None:
         super().__init__()
         self._on_delete = on_delete
         self._entries: list[dict] = []
-        self.setWindowTitle("Historique — WhisperFlow")
-        self.setMinimumSize(500, 400)
         self._build_ui()
         self.refresh(entries)
 
@@ -61,3 +60,20 @@ class HistoryWindow(QDialog):
             self._on_delete(entry_id)
             self._entries = [e for e in self._entries if e.get("id") != entry_id]
             self.refresh(self._entries)
+
+
+class HistoryWindow(QDialog):
+    """Thin dialog wrapper around HistoryWidget."""
+
+    def __init__(self, entries: list[dict], on_delete) -> None:
+        super().__init__()
+        self.setWindowTitle("Historique — WhisperFlow")
+        self.setMinimumSize(500, 400)
+        self.setStyleSheet(theme.STYLESHEET)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        self._widget = HistoryWidget(entries, on_delete)
+        layout.addWidget(self._widget)
+
+    def refresh(self, entries: list[dict]) -> None:
+        self._widget.refresh(entries)

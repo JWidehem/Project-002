@@ -11,15 +11,28 @@ MIN_DURATION_S = 0.3
 MAX_DURATION_S = 300.0
 
 
+# Below this RMS the audio is considered too quiet and will be boosted.
+_NORMALIZE_THRESHOLD = 0.02
+# Target RMS level after normalization (Whisper works well around 0.05).
+_NORMALIZE_TARGET = 0.05
+# Maximum amplification factor to avoid boosting pure silence into noise.
+_NORMALIZE_MAX_GAIN = 10.0
+
+
 class AudioCapture:
-    def __init__(self, rms_queue: queue.Queue, on_max_duration=None) -> None:
+    def __init__(self, rms_queue: queue.Queue, on_max_duration=None, device: int | None = None) -> None:
         self._rms_queue = rms_queue
         self._on_max_duration = on_max_duration
+        self._device = device
         self._chunks: list[np.ndarray] = []
         self._stream: sd.InputStream | None = None
         self._start_time: float = 0.0
         self._lock = threading.Lock()
         self._stopped = False
+
+    def set_device(self, device: int | None) -> None:
+        """Update the capture device; takes effect on the next start() call."""
+        self._device = device
 
     def start(self) -> None:
         with self._lock:
@@ -30,6 +43,7 @@ class AudioCapture:
                 samplerate=SAMPLE_RATE,
                 channels=CHANNELS,
                 dtype=DTYPE,
+                device=self._device,
                 callback=self._callback,
             )
             self._stream.start()
@@ -46,6 +60,11 @@ class AudioCapture:
         duration = len(audio) / SAMPLE_RATE
         if duration < MIN_DURATION_S:
             return None
+        # Normalize: boost quiet recordings so Whisper can hear them clearly.
+        rms = float(np.sqrt(np.mean(audio ** 2)))
+        if 0 < rms < _NORMALIZE_THRESHOLD:
+            gain = min(_NORMALIZE_TARGET / rms, _NORMALIZE_MAX_GAIN)
+            audio = np.clip(audio * gain, -1.0, 1.0)
         return audio
 
     def _callback(
