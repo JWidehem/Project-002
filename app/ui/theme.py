@@ -255,8 +255,21 @@ def blur_pixmap_region(source, rect, radius: int = GLASS_BLUR_RADIUS):
     # Crop the region from the full background pixmap
     cropped = source.copy(rect)
     img = cropped.toImage()
-    img.stackBlur(radius)
-    return _QPixmap.fromImage(img)
+    # Cheap but effective blur: scale down then scale back up with smooth filter
+    # (QImage.stackBlur not exposed in this PyQt6 build)
+    from PyQt6.QtCore import Qt as _Qt
+    factor = max(2, radius // 4)
+    small = img.scaled(
+        max(1, img.width() // factor), max(1, img.height() // factor),
+        _Qt.AspectRatioMode.IgnoreAspectRatio,
+        _Qt.TransformationMode.SmoothTransformation,
+    )
+    blurred_img = small.scaled(
+        img.width(), img.height(),
+        _Qt.AspectRatioMode.IgnoreAspectRatio,
+        _Qt.TransformationMode.SmoothTransformation,
+    )
+    return _QPixmap.fromImage(blurred_img)
 
 
 # ── Windows DWM acrylic blur-behind ──────────────────────────────────────────

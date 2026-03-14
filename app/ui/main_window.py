@@ -4,7 +4,7 @@ import os
 import sys
 import psutil
 from pathlib import Path
-from PyQt6.QtCore import Qt, QPoint, QRect, QTimer, pyqtSignal
+from PyQt6.QtCore import Qt, QPoint, QRect, QSize, QTimer, pyqtSignal
 from PyQt6.QtGui import (
     QBrush, QColor, QFont, QGuiApplication, QIcon, QLinearGradient,
     QPainter, QPainterPath, QPen, QPixmap,
@@ -22,7 +22,7 @@ _ASSETS      = Path(__file__).parent.parent.parent / "assets"
 _LOGO        = _ASSETS / "logo.png"
 _USE_ACRYLIC = False
 _C_BG        = QColor(10, 8, 6, 235)
-_C_BORDER    = QColor(201, 168, 76, 52)
+_C_BORDER    = QColor(201, 168, 76, 200)
 
 # Shared blurred background pixmap — set by MainWindow, read by GlassCard
 _bg_pixmap_cache: QPixmap | None = None
@@ -80,9 +80,9 @@ class GlassCard(QWidget):
         p.drawLine(int(r.width() * .10), 1, int(r.width() * .90), 1)
 
         # ── 4. Gold border ────────────────────────────────────────────────
-        p.setPen(QPen(QColor(201, 168, 76, 45), 1.0))
+        p.setPen(QPen(QColor(201, 168, 76, 200), 1.8))
         p.setBrush(Qt.BrushStyle.NoBrush)
-        p.drawRoundedRect(r.adjusted(0, 0, -1, -1), rad, rad)
+        p.drawRoundedRect(r.adjusted(1, 1, -1, -1), rad, rad)
 
 
 def _fmt_k(n: int) -> str:
@@ -189,37 +189,37 @@ class _BentoNavCard(GlassCard):
     nav_clicked = pyqtSignal()
 
     def __init__(self, icon: str, title: str, subtitle: str) -> None:
-        super().__init__(radius=16, strong_tint=False)
+        super().__init__(radius=14, strong_tint=False)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(20, 28, 20, 28)
+        lay.setContentsMargins(16, 16, 16, 16)
         lay.setSpacing(0)
         lay.addStretch()
 
         ic = QLabel(icon)
         ic.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        f_ic = QFont("Segoe UI Symbol", 38)
+        f_ic = QFont("Segoe UI Symbol", 26)
         ic.setFont(f_ic)
         ic.setStyleSheet(
             "color: rgba(255,255,255,0.88); background:transparent;"
         )
         lay.addWidget(ic)
-        lay.addSpacing(16)
+        lay.addSpacing(10)
 
         t = QLabel(title)
         t.setAlignment(Qt.AlignmentFlag.AlignCenter)
         t.setStyleSheet(
-            "color: rgba(255,255,255,0.90); font-size:15px; font-weight:600;"
+            "color: rgba(255,255,255,0.90); font-size:14px; font-weight:600;"
             " background:transparent; letter-spacing:0.3px;"
         )
         t.setWordWrap(True)
         lay.addWidget(t)
-        lay.addSpacing(6)
+        lay.addSpacing(4)
 
         s = QLabel(subtitle)
         s.setAlignment(Qt.AlignmentFlag.AlignCenter)
         s.setStyleSheet(
-            "color: rgba(255,255,255,0.38); font-size:11px; background:transparent;"
+            "color: rgba(255,255,255,0.38); font-size:10px; background:transparent;"
         )
         s.setWordWrap(True)
         lay.addWidget(s)
@@ -229,30 +229,6 @@ class _BentoNavCard(GlassCard):
         if ev.button() == Qt.MouseButton.LeftButton:
             self.nav_clicked.emit()
         super().mousePressEvent(ev)
-    """Horizontal stat row inside a card: icon  label ... value"""
-
-    def __init__(self, icon: str, value: str, label: str) -> None:
-        super().__init__()
-        self.setAutoFillBackground(False)
-        lay = QHBoxLayout(self)
-        lay.setContentsMargins(0, 5, 0, 5)
-        lay.setSpacing(10)
-        ic = QLabel(icon)
-        ic.setStyleSheet("font-size:15px; background:transparent;")
-        ic.setFixedWidth(22)
-        lbl = QLabel(label)
-        lbl.setStyleSheet("color:#504840; font-size:11px; background:transparent;")
-        self._val = QLabel(value)
-        self._val.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        self._val.setStyleSheet(
-            "color:#E8C96A; font-size:17px; font-weight:700; background:transparent;"
-        )
-        lay.addWidget(ic)
-        lay.addWidget(lbl, 1)
-        lay.addWidget(self._val)
-
-    def set_value(self, v: str) -> None:
-        self._val.setText(v)
 
 
 class _TitleBar(QWidget):
@@ -262,39 +238,46 @@ class _TitleBar(QWidget):
         super().__init__(parent)
         self.setFixedHeight(48)
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(18, 0, 12, 0)
-        lay.setSpacing(10)
-        logo = QLabel()
-        if _LOGO.exists():
-            px = QPixmap(str(_LOGO)).scaled(
-                26, 26,
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
-            )
-            logo.setPixmap(px)
-        logo.setFixedSize(26, 26)
-        lay.addWidget(logo)
-        lbl = QLabel("WhisperFlow")
-        f = QFont("Segoe UI", 12)
-        f.setWeight(QFont.Weight.DemiBold)
-        f.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 0.6)
-        lbl.setFont(f)
-        lbl.setStyleSheet("color: #C9A84C; background: transparent;")
-        lay.addWidget(lbl)
-        lay.addStretch()
+        lay.setContentsMargins(12, 0, 12, 0)
+        lay.setSpacing(0)
+
+        # ── Left: minimise button ────────────────────────────────────────
         min_btn = QPushButton("–")
         min_btn.setObjectName("winMinimize")
         min_btn.setToolTip("Réduire")
         min_btn.clicked.connect(parent.showMinimized)
+        lay.addWidget(min_btn)
+
+        # ── Centre: logo QPushButton (reliable click) ────────────────────
+        lay.addStretch()
+        logo_btn = QPushButton()
+        logo_btn.setObjectName("titleLogo")
+        logo_btn.setFixedSize(32, 32)
+        logo_btn.setStyleSheet(
+            "QPushButton#titleLogo { border:none; background:transparent; }"
+        )
+        logo_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        logo_btn.setToolTip("Accueil")
+        logo_btn.clicked.connect(lambda: parent._tabs.setCurrentIndex(0))
+        if _LOGO.exists():
+            px = QPixmap(str(_LOGO)).scaled(
+                28, 28,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+            logo_btn.setIcon(QIcon(px))
+            logo_btn.setIconSize(QSize(28, 28))
+        lay.addWidget(logo_btn)
+        lay.addStretch()
+
+        # ── Right: close button ──────────────────────────────────────────
         close_btn = QPushButton("×")
         close_btn.setObjectName("winClose")
         close_btn.setToolTip("Masquer")
         close_btn.clicked.connect(parent.hide)
-        lay.addWidget(min_btn)
         lay.addWidget(close_btn)
 
     def mousePressEvent(self, ev) -> None:
-        # Buttons handle their own clicks; title-bar drag handled by MainWindow.nativeEvent
         super().mousePressEvent(ev)
 
 
@@ -328,13 +311,9 @@ class MainWindow(QMainWindow):
 
         root.addWidget(_TitleBar(self))
 
-        sep = QWidget()
-        sep.setFixedHeight(1)
-        sep.setStyleSheet("background: rgba(201,168,76,0.38);")
-        root.addWidget(sep)
-
         self._tabs = QTabWidget()
         self._tabs.setDocumentMode(True)
+        self._tabs.tabBar().hide()
         root.addWidget(self._tabs, 1)
 
         grip_row = QHBoxLayout()
@@ -424,7 +403,7 @@ class MainWindow(QMainWindow):
             p.fillPath(path, _C_BG)
 
         # 2. Dark warm vignette overlay so UI text stays readable
-        p.fillRect(r, QColor(6, 5, 3, 155))
+        p.fillRect(r, QColor(6, 5, 3, 80))
 
         p.setClipping(False)
 
@@ -438,9 +417,9 @@ class MainWindow(QMainWindow):
         p.drawLine(int(r.width() * .15), 1, int(r.width() * .85), 1)
 
         # 4. Window border
-        p.setPen(QPen(_C_BORDER, 1.0))
+        p.setPen(QPen(_C_BORDER, 1.8))
         p.setBrush(Qt.BrushStyle.NoBrush)
-        p.drawRoundedRect(r.adjusted(0, 0, -1, -1), rad, rad)
+        p.drawRoundedRect(r.adjusted(1, 1, -1, -1), rad, rad)
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
@@ -587,12 +566,12 @@ class MainWindow(QMainWindow):
         # ── Left column: Réglages (col 0, spans both rows) ────────────────
         sets_card = _BentoNavCard("⚙", "Réglages", "Modèles, raccourcis, options")
         sets_card.nav_clicked.connect(lambda: self._tabs.setCurrentIndex(2))
-        grid.addWidget(sets_card, 0, 0, 2, 1)
+        grid.addWidget(sets_card, 1, 0)
 
         # ── Right column: Performances (col 2, spans both rows) ───────────
         perf_card = _BentoNavCard("◈", "Performances", "CPU · RAM · Threads")
         perf_card.nav_clicked.connect(lambda: self._tabs.setCurrentIndex(3))
-        grid.addWidget(perf_card, 0, 2, 2, 1)
+        grid.addWidget(perf_card, 1, 2)
 
         # ── Inject Historique mini-list into bottom-centre of centre_wrap ──
         hist_card = GlassCard(radius=14, strong_tint=True)
