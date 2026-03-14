@@ -218,18 +218,18 @@ QLabel#statsLabel    { color: #504840; font-size: 11px; background: transparent;
 
 /* ── Window control buttons ──────────────────────────────────────────────────── */
 QPushButton#winClose {
-    background: transparent; border: none; border-radius: 10px;
-    color: #504840; font-size: 13px; padding: 0;
-    min-width: 22px; max-width: 22px;
-    min-height: 22px; max-height: 22px;
+    background: transparent; border: none; border-radius: 12px;
+    color: #C9A84C; font-size: 16px; font-weight: 600; padding: 0;
+    min-width: 28px; max-width: 28px;
+    min-height: 28px; max-height: 28px;
 }
 QPushButton#winClose:hover { background: rgba(200,60,60,0.65); color: #F0EDE0; }
 
 QPushButton#winMinimize {
-    background: transparent; border: none; border-radius: 10px;
-    color: #504840; font-size: 16px; padding: 0;
-    min-width: 22px; max-width: 22px;
-    min-height: 22px; max-height: 22px;
+    background: transparent; border: none; border-radius: 12px;
+    color: #C9A84C; font-size: 18px; font-weight: 400; padding: 0;
+    min-width: 28px; max-width: 28px;
+    min-height: 28px; max-height: 28px;
 }
 QPushButton#winMinimize:hover { background: rgba(201,168,76,0.22); color: #E8C96A; }
 """

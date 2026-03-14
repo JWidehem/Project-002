@@ -5,7 +5,7 @@ from pathlib import Path
 from app.engine.state import AppState
 
 _ASSETS = Path(__file__).parent.parent.parent / "assets"
-_LOGO = _ASSETS / "logo.png"
+_LOGO = _ASSETS / "logo00.png"
 
 _STATUS_COLORS = {
     AppState.RECORDING: QColor(220, 60, 60),

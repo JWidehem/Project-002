@@ -298,7 +298,7 @@ def _repair_shortcut() -> None:
             return
         script = str(_Path(__file__).resolve())
         wdir = str(_Path(__file__).parent)
-        ico = _Path(__file__).parent / "assets" / "logo.ico"
+        ico = _Path(__file__).parent / "assets" / "icone00.ico"
         ico_line = f'$lnk.IconLocation = "{ico},0"' if ico.exists() else ""
         ps = (
             f'$sh = New-Object -ComObject WScript.Shell; '
@@ -357,11 +357,11 @@ def main() -> None:
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("WhisperFlow.App.1.0")
     except Exception:
         pass
-    _ico = Path(__file__).parent / "assets" / "logo.ico"
+    _ico = Path(__file__).parent / "assets" / "icone00.ico"
     if _ico.exists():
         qt_app.setWindowIcon(QIcon(str(_ico)))
-    elif (Path(__file__).parent / "assets" / "logo.png").exists():
-        qt_app.setWindowIcon(QIcon(str(Path(__file__).parent / "assets" / "logo.png")))
+    elif (Path(__file__).parent / "assets" / "logo00.png").exists():
+        qt_app.setWindowIcon(QIcon(str(Path(__file__).parent / "assets" / "logo00.png")))
 
     try:
         app = App(qt_app, transcriber=_preload_transcriber)
