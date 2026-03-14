@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import ctypes
 import sys
+from pathlib import Path
 
 # ── Colour constants (also used from Python paint code) ──────────────────────
 GOLD        = "#C9A84C"
@@ -22,6 +23,18 @@ TEXT_SEC    = "#A89870"
 TEXT_MUT    = "#504840"
 BG_WIN      = (10,  8,  6, 215)   # rgba – very dark warm
 BG_SURFACE  = (22, 19, 12, 185)   # rgba – dark warm surface
+
+# ── Background image path ─────────────────────────────────────────────────────
+_ASSETS_DIR = Path(__file__).parent.parent.parent / "assets"
+BG_IMAGE    = _ASSETS_DIR / "background00.png"
+
+# ── Glassmorphism helpers ─────────────────────────────────────────────────────
+# GLASS_BLUR_RADIUS : stack-blur radius applied to the captured background slice
+# GLASS_TINT        : dark warm tint drawn over the blurred slice (RGBA)
+# GLASS_TINT_STRONG : stronger tint for cards with lots of text content
+GLASS_BLUR_RADIUS  = 18
+GLASS_TINT         = (16, 12,  6, 110)   # rgba
+GLASS_TINT_STRONG  = (12,  9,  4, 155)   # rgba
 
 # ── Full QSS stylesheet ───────────────────────────────────────────────────────
 STYLESHEET = r"""
@@ -220,6 +233,30 @@ QPushButton#winMinimize {
 }
 QPushButton#winMinimize:hover { background: rgba(201,168,76,0.22); color: #E8C96A; }
 """
+
+
+# ── Glassmorphism backdrop-blur helper ───────────────────────────────────────
+def blur_pixmap_region(source, rect, radius: int = GLASS_BLUR_RADIUS):
+    """
+    Extract *rect* from *source*, apply a stack-blur of *radius* pixels,
+    and return the blurred slice as a new QPixmap.
+
+    Uses QImage.stackBlur() introduced in Qt 6.5 (we ship PyQt6 6.7).
+    Falls back to a plain dark tint if the source is null or rect is empty.
+    """
+    from PyQt6.QtGui import QPixmap as _QPixmap, QColor as _QColor
+    from PyQt6.QtCore import QRect as _QRect
+
+    if source.isNull() or rect.isEmpty():
+        fallback = _QPixmap(max(rect.width(), 1), max(rect.height(), 1))
+        fallback.fill(_QColor(16, 12, 6, 180))
+        return fallback
+
+    # Crop the region from the full background pixmap
+    cropped = source.copy(rect)
+    img = cropped.toImage()
+    img.stackBlur(radius)
+    return _QPixmap.fromImage(img)
 
 
 # ── Windows DWM acrylic blur-behind ──────────────────────────────────────────

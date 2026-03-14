@@ -4,53 +4,83 @@ import os
 import sys
 import psutil
 from pathlib import Path
-from PyQt6.QtCore import Qt, QPoint, QTimer, pyqtSignal
+from PyQt6.QtCore import Qt, QPoint, QRect, QTimer, pyqtSignal
 from PyQt6.QtGui import (
     QBrush, QColor, QFont, QGuiApplication, QIcon, QLinearGradient,
     QPainter, QPainterPath, QPen, QPixmap,
 )
 from PyQt6.QtWidgets import (
-    QHBoxLayout, QLabel, QMainWindow,
-    QPushButton, QScrollArea, QSizeGrip,
+    QGridLayout, QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
+    QMainWindow, QPushButton, QScrollArea, QSizeGrip,
     QTabWidget, QVBoxLayout, QWidget,
 )
 from app.ui import theme
 from app.ui.history import HistoryWidget
 from app.ui.settings import SettingsWidget
 
-_ASSETS = Path(__file__).parent.parent.parent / "assets"
-_LOGO   = _ASSETS / "logo.png"
+_ASSETS      = Path(__file__).parent.parent.parent / "assets"
+_LOGO        = _ASSETS / "logo.png"
 _USE_ACRYLIC = False
-_C_BG     = QColor(10, 8, 6, 235)
-_C_BORDER = QColor(201, 168, 76, 52)
+_C_BG        = QColor(10, 8, 6, 235)
+_C_BORDER    = QColor(201, 168, 76, 52)
+
+# Shared blurred background pixmap — set by MainWindow, read by GlassCard
+_bg_pixmap_cache: QPixmap | None = None
 
 
 
 
 class GlassCard(QWidget):
-    """Dark glass card with gold rim-light — paints own background."""
+    """
+    Glassmorphism card: blurred background slice + dark warm tint + gold rim-light.
+    Reads the shared _bg_pixmap_cache set by MainWindow at resize/show time.
+    """
 
-    def __init__(self, parent=None, radius: int = 12) -> None:
+    def __init__(self, parent=None, radius: int = 12, strong_tint: bool = False) -> None:
         super().__init__(parent)
         self._radius = radius
+        self._strong_tint = strong_tint
 
     def paintEvent(self, _event) -> None:
+        global _bg_pixmap_cache
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        r, rad = self.rect(), float(self._radius)
-        path = QPainterPath()
-        path.addRoundedRect(
-            float(r.x()), float(r.y()), float(r.width()), float(r.height()), rad, rad
-        )
-        p.fillPath(path, QColor(22, 19, 12, 110))
+        r   = self.rect()
+        rad = float(self._radius)
+
+        # ── Clipping path ────────────────────────────────────────────────
+        clip = QPainterPath()
+        clip.addRoundedRect(float(r.x()), float(r.y()),
+                            float(r.width()), float(r.height()), rad, rad)
+        p.setClipPath(clip)
+
+        # ── 1. Blurred background slice ──────────────────────────────────
+        if _bg_pixmap_cache is not None and not _bg_pixmap_cache.isNull():
+            # Map this widget's top-left to the top-level window coordinates
+            top_left = self.mapTo(self.window(), QPoint(0, 0))
+            src_rect  = QRect(top_left.x(), top_left.y(), r.width(), r.height())
+            blurred   = theme.blur_pixmap_region(_bg_pixmap_cache, src_rect)
+            p.drawPixmap(r, blurred)
+        else:
+            p.fillRect(r, QColor(10, 8, 6))
+
+        # ── 2. Dark warm tint overlay ────────────────────────────────────
+        t = theme.GLASS_TINT_STRONG if self._strong_tint else theme.GLASS_TINT
+        p.fillRect(r, QColor(t[0], t[1], t[2], t[3]))
+
+        p.setClipping(False)
+
+        # ── 3. Gold rim-light (top edge) ─────────────────────────────────
         rim = QLinearGradient(r.width() * .1, 0, r.width() * .9, 0)
         rim.setColorAt(0.0,  QColor(201, 168, 76, 0))
-        rim.setColorAt(0.35, QColor(201, 168, 76, 110))
-        rim.setColorAt(0.65, QColor(201, 168, 76, 110))
+        rim.setColorAt(0.35, QColor(201, 168, 76, 130))
+        rim.setColorAt(0.65, QColor(201, 168, 76, 130))
         rim.setColorAt(1.0,  QColor(201, 168, 76, 0))
         p.setPen(QPen(QBrush(rim), 1.2))
         p.drawLine(int(r.width() * .10), 1, int(r.width() * .90), 1)
-        p.setPen(QPen(QColor(201, 168, 76, 40), 1.0))
+
+        # ── 4. Gold border ────────────────────────────────────────────────
+        p.setPen(QPen(QColor(201, 168, 76, 45), 1.0))
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawRoundedRect(r.adjusted(0, 0, -1, -1), rad, rad)
 
@@ -149,7 +179,56 @@ class _NavTile(GlassCard):
         super().mousePressEvent(ev)
 
 
-class _StatRow(QWidget):
+class _BentoNavCard(GlassCard):
+    """
+    Full-height navigation card for left/right bento columns.
+    Large Glimmer-style icon (text) centred vertically, title + subtitle below.
+    Entire card is clickable.
+    """
+
+    nav_clicked = pyqtSignal()
+
+    def __init__(self, icon: str, title: str, subtitle: str) -> None:
+        super().__init__(radius=16, strong_tint=False)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(20, 28, 20, 28)
+        lay.setSpacing(0)
+        lay.addStretch()
+
+        ic = QLabel(icon)
+        ic.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        f_ic = QFont("Segoe UI Symbol", 38)
+        ic.setFont(f_ic)
+        ic.setStyleSheet(
+            "color: rgba(255,255,255,0.88); background:transparent;"
+        )
+        lay.addWidget(ic)
+        lay.addSpacing(16)
+
+        t = QLabel(title)
+        t.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        t.setStyleSheet(
+            "color: rgba(255,255,255,0.90); font-size:15px; font-weight:600;"
+            " background:transparent; letter-spacing:0.3px;"
+        )
+        t.setWordWrap(True)
+        lay.addWidget(t)
+        lay.addSpacing(6)
+
+        s = QLabel(subtitle)
+        s.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        s.setStyleSheet(
+            "color: rgba(255,255,255,0.38); font-size:11px; background:transparent;"
+        )
+        s.setWordWrap(True)
+        lay.addWidget(s)
+        lay.addStretch()
+
+    def mousePressEvent(self, ev) -> None:
+        if ev.button() == Qt.MouseButton.LeftButton:
+            self.nav_clicked.emit()
+        super().mousePressEvent(ev)
     """Horizontal stat row inside a card: icon  label ... value"""
 
     def __init__(self, icon: str, value: str, label: str) -> None:
@@ -231,8 +310,10 @@ class MainWindow(QMainWindow):
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Window)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, _USE_ACRYLIC)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
-        self.setMinimumSize(660, 560)
-        self.resize(700, 640)
+        self.setMinimumSize(780, 620)
+        self.resize(900, 720)
+        # Load background image once
+        self._raw_bg = QPixmap(str(theme.BG_IMAGE)) if theme.BG_IMAGE.exists() else QPixmap()
         if _LOGO.exists():
             self.setWindowIcon(QIcon(str(_LOGO)))
         self.setStyleSheet(theme.STYLESHEET)
@@ -310,6 +391,18 @@ class MainWindow(QMainWindow):
 
     # ── Qt overrides ──────────────────────────────────────────────────────────
 
+    def _rebuild_bg_cache(self) -> None:
+        """Scale raw background to current window size and store in module-level cache."""
+        global _bg_pixmap_cache
+        if not self._raw_bg.isNull():
+            _bg_pixmap_cache = self._raw_bg.scaled(
+                self.size(),
+                Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+        else:
+            _bg_pixmap_cache = None
+
     def paintEvent(self, _event) -> None:
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -318,7 +411,24 @@ class MainWindow(QMainWindow):
         path.addRoundedRect(
             float(r.x()), float(r.y()), float(r.width()), float(r.height()), rad, rad
         )
-        p.fillPath(path, _C_BG)
+        p.setClipPath(path)
+
+        # 1. Background image (cover)
+        if _bg_pixmap_cache is not None and not _bg_pixmap_cache.isNull():
+            # Centre-crop if scaled bigger than window
+            bw, bh = _bg_pixmap_cache.width(), _bg_pixmap_cache.height()
+            ox = (bw - r.width())  // 2
+            oy = (bh - r.height()) // 2
+            p.drawPixmap(0, 0, _bg_pixmap_cache, ox, oy, r.width(), r.height())
+        else:
+            p.fillPath(path, _C_BG)
+
+        # 2. Dark warm vignette overlay so UI text stays readable
+        p.fillRect(r, QColor(6, 5, 3, 155))
+
+        p.setClipping(False)
+
+        # 3. Gold rim-light on top edge
         rg = QLinearGradient(r.width() * .15, 0, r.width() * .85, 0)
         rg.setColorAt(0.0,  QColor(201, 168, 76, 0))
         rg.setColorAt(0.35, QColor(201, 168, 76, 140))
@@ -326,12 +436,19 @@ class MainWindow(QMainWindow):
         rg.setColorAt(1.0,  QColor(201, 168, 76, 0))
         p.setPen(QPen(QBrush(rg), 1.5))
         p.drawLine(int(r.width() * .15), 1, int(r.width() * .85), 1)
+
+        # 4. Window border
         p.setPen(QPen(_C_BORDER, 1.0))
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawRoundedRect(r.adjusted(0, 0, -1, -1), rad, rad)
 
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._rebuild_bg_cache()
+
     def showEvent(self, event) -> None:
         super().showEvent(event)
+        self._rebuild_bg_cache()
         if _USE_ACRYLIC:
             theme.enable_acrylic(int(self.winId()), 0x28080706)
 
@@ -363,98 +480,183 @@ class MainWindow(QMainWindow):
 
     # ── Tab builders ──────────────────────────────────────────────────────────
 
-    def _make_home_tab(self) -> QScrollArea:
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+    def _make_home_tab(self) -> QWidget:
+        # Non-scrollable container — bento fills the tab area
         container = QWidget()
-        root = QVBoxLayout(container)
-        root.setContentsMargins(20, 18, 20, 18)
-        root.setSpacing(12)
+        container.setAutoFillBackground(False)
+        grid = QGridLayout(container)
+        grid.setContentsMargins(18, 14, 18, 14)
+        grid.setSpacing(12)
+        # 3 equal columns
+        for c in range(3):
+            grid.setColumnStretch(c, 1)
+        # 2 rows: top taller, bottom shorter
+        grid.setRowStretch(0, 3)
+        grid.setRowStretch(1, 2)
 
-        # ── Top row: Welcome card (left) + Stats card (right) ─────────────
-        top_row = QHBoxLayout()
-        top_row.setSpacing(12)
+        # ── Centre-top: Clock / Welcome card (col 1, row 0) ───────────────
+        clock_card = GlassCard(radius=16, strong_tint=True)
+        ck_lay = QVBoxLayout(clock_card)
+        ck_lay.setContentsMargins(24, 20, 24, 20)
+        ck_lay.setSpacing(4)
+        ck_lay.addStretch()
 
-        # Welcome card
-        welcome = GlassCard(radius=14)
-        w_lay = QVBoxLayout(welcome)
-        w_lay.setContentsMargins(20, 20, 20, 20)
-        w_lay.setSpacing(3)
-        logo_lbl = QLabel()
-        if _LOGO.exists():
-            px = QPixmap(str(_LOGO)).scaled(
-                40, 40,
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
-            )
-            logo_lbl.setPixmap(px)
-        logo_lbl.setFixedSize(40, 40)
-        w_lay.addWidget(logo_lbl)
-        w_lay.addStretch()
-        greet_lbl = QLabel("Bienvenue 👋")
-        greet_lbl.setStyleSheet(
-            "color:#504840; font-size:11px; background:transparent; letter-spacing:0.5px;"
+        self._home_date_lbl = QLabel()
+        self._home_date_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._home_date_lbl.setStyleSheet(
+            "color: rgba(255,255,255,0.55); font-size:11px; letter-spacing:2px;"
+            " text-transform:uppercase; background:transparent;"
+        )
+        ck_lay.addWidget(self._home_date_lbl)
+
+        self._home_clock_lbl = QLabel("00:00")
+        self._home_clock_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        f_clock = QFont("Segoe UI", 48)
+        f_clock.setWeight(QFont.Weight.Thin)
+        self._home_clock_lbl.setFont(f_clock)
+        self._home_clock_lbl.setStyleSheet(
+            "color: rgba(255,255,255,0.92); background:transparent; letter-spacing:-1px;"
+        )
+        ck_lay.addWidget(self._home_clock_lbl)
+
+        welcome_lbl = QLabel("Welcome back,")
+        welcome_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        welcome_lbl.setStyleSheet(
+            "color: rgba(255,255,255,0.50); font-size:14px; background:transparent;"
         )
         name_lbl = QLabel("Jimmy")
+        name_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         name_lbl.setStyleSheet(
-            "color:#E8C96A; font-size:24px; font-weight:700; background:transparent;"
+            "color: rgba(255,255,255,0.90); font-size:22px; font-weight:600;"
+            " background:transparent; letter-spacing:0.5px;"
         )
-        self._home_date_lbl = QLabel()
-        self._home_date_lbl.setStyleSheet(
-            "color:#8A6A28; font-size:11px; background:transparent;"
-        )
-        w_lay.addWidget(greet_lbl)
-        w_lay.addWidget(name_lbl)
-        w_lay.addWidget(self._home_date_lbl)
-        welcome.setMinimumHeight(152)
+        ck_lay.addWidget(welcome_lbl)
+        ck_lay.addWidget(name_lbl)
+        ck_lay.addStretch()
+        grid.addWidget(clock_card, 0, 1)
 
-        # Stats card
-        stats_card = GlassCard(radius=14)
-        s_lay = QVBoxLayout(stats_card)
-        s_lay.setContentsMargins(18, 16, 18, 16)
-        s_lay.setSpacing(2)
-        stats_title = QLabel("ACTIVITÉ")
-        stats_title.setStyleSheet(
-            "color:#C9A84C; font-size:9px; letter-spacing:1.5px;"
+        # ── Centre-bottom: Stats pill (col 1, between rows — injected below clock) ──
+        # We split centre col into clock (row 0) + stats (compact, row 0 bottom via nested)
+        # Actually: put stats bar as row 0 col 1 companion → use nested VBox inside clock
+        stats_bar = QWidget()
+        stats_bar.setAutoFillBackground(False)
+        sb_lay = QHBoxLayout(stats_bar)
+        sb_lay.setContentsMargins(0, 0, 0, 0)
+        sb_lay.setSpacing(0)
+
+        def _stat_pill(value_attr: str, label: str) -> tuple[QWidget, QLabel]:
+            pill = GlassCard(radius=10)
+            pl = QVBoxLayout(pill)
+            pl.setContentsMargins(14, 10, 14, 10)
+            pl.setSpacing(1)
+            val_lbl = QLabel("—")
+            val_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            val_lbl.setStyleSheet(
+                "color: rgba(255,255,255,0.88); font-size:18px; font-weight:700;"
+                " background:transparent;"
+            )
+            lbl_w = QLabel(label)
+            lbl_w.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            lbl_w.setStyleSheet(
+                "color: rgba(255,255,255,0.40); font-size:9px; letter-spacing:1.2px;"
+                " background:transparent;"
+            )
+            pl.addWidget(val_lbl)
+            pl.addWidget(lbl_w)
+            return pill, val_lbl
+
+        words_pill, self._stat_words_lbl = _stat_pill("words",  "MOTS")
+        wpm_pill,   self._stat_wpm_lbl   = _stat_pill("wpm",    "WPM")
+        days_pill,  self._stat_days_lbl  = _stat_pill("days",   "JOURS")
+        sb_lay.addWidget(words_pill, 1)
+        sb_lay.addSpacing(8)
+        sb_lay.addWidget(wpm_pill, 1)
+        sb_lay.addSpacing(8)
+        sb_lay.addWidget(days_pill, 1)
+
+        # Wrap clock + stats bar vertically in col 1
+        centre_wrap = QWidget()
+        centre_wrap.setAutoFillBackground(False)
+        cw_lay = QVBoxLayout(centre_wrap)
+        cw_lay.setContentsMargins(0, 0, 0, 0)
+        cw_lay.setSpacing(10)
+        cw_lay.addWidget(clock_card, 3)
+        cw_lay.addWidget(stats_bar, 1)
+        grid.addWidget(centre_wrap, 0, 1, 2, 1)   # spans both rows, centre col
+
+        # ── Left column: Réglages (col 0, spans both rows) ────────────────
+        sets_card = _BentoNavCard("⚙", "Réglages", "Modèles, raccourcis, options")
+        sets_card.nav_clicked.connect(lambda: self._tabs.setCurrentIndex(2))
+        grid.addWidget(sets_card, 0, 0, 2, 1)
+
+        # ── Right column: Performances (col 2, spans both rows) ───────────
+        perf_card = _BentoNavCard("◈", "Performances", "CPU · RAM · Threads")
+        perf_card.nav_clicked.connect(lambda: self._tabs.setCurrentIndex(3))
+        grid.addWidget(perf_card, 0, 2, 2, 1)
+
+        # ── Inject Historique mini-list into bottom-centre of centre_wrap ──
+        hist_card = GlassCard(radius=14, strong_tint=True)
+        h_lay = QVBoxLayout(hist_card)
+        h_lay.setContentsMargins(16, 14, 16, 14)
+        h_lay.setSpacing(6)
+        hist_title = QLabel("HISTORIQUE")
+        hist_title.setStyleSheet(
+            "color: rgba(201,168,76,0.80); font-size:9px; letter-spacing:1.8px;"
             " font-weight:600; background:transparent;"
         )
-        s_lay.addWidget(stats_title)
-        sep_line = QLabel()
-        sep_line.setFixedHeight(1)
-        sep_line.setStyleSheet("background: rgba(201,168,76,0.20); margin: 4px 0;")
-        s_lay.addWidget(sep_line)
-        self._stat_words = _StatRow("📝", "0",  "mots dictés")
-        self._stat_wpm   = _StatRow("⚡", "—",  "mots / min")
-        self._stat_days  = _StatRow("📅", "0",  "jours actifs")
-        s_lay.addWidget(self._stat_words)
-        s_lay.addWidget(self._stat_wpm)
-        s_lay.addWidget(self._stat_days)
-        s_lay.addStretch()
-        stats_card.setMinimumHeight(152)
+        h_lay.addWidget(hist_title)
+        self._home_hist_list = QListWidget()
+        self._home_hist_list.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._home_hist_list.setStyleSheet(
+            "QListWidget { background:transparent; border:none; color:rgba(255,255,255,0.75);"
+            " font-size:12px; }"
+            "QListWidget::item { padding:5px 2px; border-bottom:1px solid rgba(255,255,255,0.06); }"
+            "QListWidget::item:hover { background:rgba(201,168,76,0.10); }"
+        )
+        self._home_hist_list.itemDoubleClicked.connect(
+            lambda: self._tabs.setCurrentIndex(1)
+        )
+        h_lay.addWidget(self._home_hist_list, 1)
+        view_all_btn = QPushButton("Voir tout →")
+        view_all_btn.setFixedHeight(28)
+        view_all_btn.setStyleSheet(
+            "QPushButton { background:transparent; border:none; color:rgba(201,168,76,0.65);"
+            " font-size:11px; text-align:right; padding-right:2px; }"
+            "QPushButton:hover { color:#E8C96A; }"
+        )
+        view_all_btn.clicked.connect(lambda: self._tabs.setCurrentIndex(1))
+        h_lay.addWidget(view_all_btn, 0, Qt.AlignmentFlag.AlignRight)
 
-        top_row.addWidget(welcome, 1)
-        top_row.addWidget(stats_card, 1)
-        root.addLayout(top_row)
+        # Replace stats_bar in cw_lay with hist_card at bottom
+        # cw_lay currently: clock(3) + stats_bar(1)
+        # We want:          clock(3) + hist_card(2)
+        cw_lay.removeWidget(stats_bar)
+        stats_bar.setParent(None)  # type: ignore[arg-type]
 
-        # ── Bottom row: Historique | Réglages | Performances ───────────────
-        nav_row = QHBoxLayout()
-        nav_row.setSpacing(12)
-        hist_card = _NavTile("📜", "Historique", "Toutes vos transcriptions")
-        hist_card.nav_clicked.connect(lambda: self._tabs.setCurrentIndex(1))
-        sets_card = _NavTile("⚙️", "Réglages", "Modèles, options")
-        sets_card.nav_clicked.connect(lambda: self._tabs.setCurrentIndex(2))
-        perf_card = _NavTile("📊", "Performances", "CPU, RAM, threads")
-        perf_card.nav_clicked.connect(lambda: self._tabs.setCurrentIndex(3))
-        nav_row.addWidget(hist_card, 1)
-        nav_row.addWidget(sets_card, 1)
-        nav_row.addWidget(perf_card, 1)
-        root.addLayout(nav_row)
+        # Re-insert: clock top, stats_bar row inside clock_card bottom area,
+        # hist_card below clock
+        # Simplest: remove clock, rebuild cw_lay
+        cw_lay.removeWidget(clock_card)
+        # Clear remaining items
+        while cw_lay.count():
+            item = cw_lay.takeAt(0)
+            if item.widget():
+                item.widget().setParent(None)  # type: ignore[arg-type]
 
-        root.addStretch()
-        scroll.setWidget(container)
+        # Inner clock card now embeds stats bar as its last child
+        ck_lay.addWidget(stats_bar)
+
+        cw_lay.addWidget(clock_card, 1)
+        cw_lay.addWidget(hist_card, 1)
+
+        # Clock update timer
+        self._clock_timer = QTimer(self)
+        self._clock_timer.timeout.connect(self._tick_clock)
+        self._clock_timer.start(1000)
+        self._tick_clock()
+
         self._refresh_home()
-        return scroll
+        return container
 
     def _make_history_tab(self) -> QWidget:
         wrap = QWidget()
@@ -569,13 +771,30 @@ class MainWindow(QMainWindow):
                       "juillet", "août", "septembre", "octobre", "novembre", "décembre"]
         today = _date.today()
         self._home_date_lbl.setText(
-            f"{_DAYS_FR[today.weekday()]} {today.day}"
-            f" {_MONTHS_FR[today.month - 1]} {today.year}"
+            f"{_DAYS_FR[today.weekday()].upper()}  {today.day}"
+            f" {_MONTHS_FR[today.month - 1].upper()} {today.year}"
         )
         words, wpm, days = self._compute_stats()
-        self._stat_words.set_value(_fmt_k(words))
-        self._stat_wpm.set_value(f"{wpm:.0f}" if wpm > 0 else "—")
-        self._stat_days.set_value(str(days))
+        self._stat_words_lbl.setText(_fmt_k(words))
+        self._stat_wpm_lbl.setText(f"{wpm:.0f}" if wpm > 0 else "—")
+        self._stat_days_lbl.setText(str(days))
+        # Populate mini history list (last 4 entries)
+        try:
+            self._home_hist_list.clear()
+            entries = self._history_store.list()
+            for e in entries[:4]:
+                dt   = e.get("created_at", "")[11:16]   # HH:MM
+                text = e.get("clean_text", "")
+                preview = text[:52] + ("…" if len(text) > 52 else "")
+                item = QListWidgetItem(f"{dt}  {preview}")
+                self._home_hist_list.addItem(item)
+        except Exception:
+            pass
+
+    def _tick_clock(self) -> None:
+        from datetime import datetime as _dt
+        now = _dt.now()
+        self._home_clock_lbl.setText(now.strftime("%H:%M"))
 
     def _refresh_perf(self) -> None:
         try:
