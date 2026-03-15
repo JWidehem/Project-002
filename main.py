@@ -10,6 +10,27 @@ from pathlib import Path
 
 import psutil
 
+# Pre-load CUDA DLLs before ctranslate2 is imported.
+# ctranslate2 ships cudnn64_9.dll but NOT cublas64_12.dll; the latter comes
+# from the nvidia-cublas-cu12 pip package.  ctranslate2's C++ extension calls
+# LoadLibrary("cublas64_12.dll") lazily at inference time — add_dll_directory()
+# alone is not sufficient because the native LoadLibrary path ignores it.
+# Loading with ctypes.CDLL first forces Windows to cache the module handle so
+# the subsequent LoadLibrary("cublas64_12.dll") call succeeds immediately.
+if sys.platform == "win32":
+    try:
+        import ctypes as _ctypes
+        import glob as _glob
+        import os as _os
+        _site_pkg = _os.path.join(_os.path.dirname(__file__), ".venv", "Lib", "site-packages")
+        for _dll in _glob.glob(_os.path.join(_site_pkg, "nvidia", "cublas", "bin", "*.dll")):
+            try:
+                _ctypes.CDLL(_dll)
+            except OSError:
+                pass
+    except Exception:
+        pass
+
 # ctranslate2 / Intel MKL DLLs MUST be loaded before PyQt6 DLLs on Windows.
 # If Qt initialises its thread infrastructure first, MKL's own thread-pool
 # startup causes an access violation (0xC0000005).  Importing Transcriber here
@@ -118,6 +139,7 @@ class App:
             self._rms_queue,
             on_max_duration=self._on_max_duration,
             device=self._settings.get("audio_device"),
+            on_error=self._on_audio_error,
         )
         # Reuse pre-loaded transcriber if provided (MKL already initialized before Qt).
         self._transcriber = transcriber or Transcriber(
@@ -132,12 +154,14 @@ class App:
             on_save_settings=self._apply_settings,
             history_store=self._history_store,
             on_record_toggle=self._toggle_recording,
+            on_export=self._export_history,
         )
 
         self._tray = TrayIcon(
             on_open=self._main_window.show_and_raise,
             on_history=self._show_history,
             on_settings=self._show_settings,
+            on_export=self._export_history,
             on_quit=qt_app.quit,
         )
 
@@ -208,6 +232,8 @@ class App:
         self._run_transcription(audio)
 
     def _run_transcription(self, audio) -> None:
+        done = threading.Event()
+
         def _worker():
             try:
                 import numpy as np
@@ -226,7 +252,11 @@ class App:
                         level=self._settings.get("cleanup_level", "light"),
                         filler_words=self._settings.get("filler_words", []),
                     )
-                    inject(text)
+                    self._hotkeys.suspend()
+                    try:
+                        inject(text)
+                    finally:
+                        self._hotkeys.resume()
                     self._history_store.save(
                         raw=raw_text, clean=text, duration=len(audio) / SAMPLE_RATE
                     )
@@ -238,10 +268,21 @@ class App:
                 logging.error(f"Transcription error: {e}", exc_info=True)
                 self._notify("WhisperFlow", f"Erreur de transcription: {e}")
             finally:
+                done.set()
                 if self._state.current() == AppState.TRANSCRIBING:
                     self._state.transition(AppState.IDLE)
                 logging.info("Worker thread finished")
+
+        def _timeout_check():
+            if not done.wait(90.0):
+                logging.warning("Transcription timeout (>90s) — cancelling")
+                self._transcriber.cancel()
+                if self._state.current() == AppState.TRANSCRIBING:
+                    self._state.transition(AppState.IDLE)
+                self._notify("WhisperFlow", "Transcription trop longue — annulée automatiquement")
+
         threading.Thread(target=_worker, daemon=True).start()
+        threading.Thread(target=_timeout_check, daemon=True).start()
 
     def _cancel(self) -> None:
         self._transcriber.cancel()
@@ -249,6 +290,14 @@ class App:
             self._audio.stop()
         if self._state.current() in (AppState.RECORDING, AppState.TRANSCRIBING):
             self._state.transition(AppState.IDLE)
+        self._hotkeys.reset()
+
+    def _on_audio_error(self, msg: str) -> None:
+        """Called from audio thread on device error (e.g. mic disconnected)."""
+        logging.error(f"Audio device error: {msg}")
+        if self._state.current() in (AppState.RECORDING, AppState.TRANSCRIBING):
+            self._cancel()
+        self._notify("WhisperFlow", "⚠ Microphone déconnecté — veuillez le rebrancher")
 
     def _show_settings(self) -> None:
         win = SettingsWindow(settings=self._settings, on_save=self._apply_settings)
@@ -282,8 +331,25 @@ class App:
 
     def _show_history(self) -> None:
         entries = self._history_store.list()
-        win = HistoryWindow(entries=entries, on_delete=self._history_store.delete)
+        win = HistoryWindow(
+            entries=entries,
+            on_delete=self._history_store.delete,
+            on_export=self._export_history,
+        )
         win.exec()
+
+    def _export_history(self) -> None:
+        from PyQt6.QtWidgets import QFileDialog
+        from datetime import datetime
+        default_name = f"whisperflow_historique_{datetime.now().strftime('%Y%m%d_%H%M')}.csv"
+        path, _ = QFileDialog.getSaveFileName(
+            self._main_window, "Exporter l'historique", default_name,
+            "CSV (*.csv);;Tous les fichiers (*)"
+        )
+        if not path:
+            return
+        count = self._history_store.export_csv(Path(path))
+        self._notify("WhisperFlow", f"{count} entrée(s) exportée(s) → {Path(path).name}")
 
 
 def _repair_shortcut() -> None:
@@ -337,14 +403,18 @@ def main() -> None:
     # import at the top of this file).  The model is loaded here, before
     # QApplication, so MKL's thread pool is fully initialised before Qt
     # starts its own threading infrastructure.
-    logging.info("Startup: loading model")
+    logging.info("Startup: initialising transcriber")
     _preload_settings = Settings(DATA_DIR).load()
     _preload_transcriber = Transcriber(
         _preload_settings["model"],
         compute_device=_preload_settings.get("compute_device", "cpu"),
     )
-    _preload_transcriber._ensure_loaded()
-    logging.info("Startup: model loaded — starting Qt")
+    if _preload_settings.get("preload_model", False):
+        logging.info("Startup: preloading model (preload_model=true)")
+        _preload_transcriber._ensure_loaded()
+        logging.info("Startup: model loaded — starting Qt")
+    else:
+        logging.info("Startup: model will load on first dictation — starting Qt")
 
     atexit.register(_remove_lockfile)
     qt_app = QApplication(sys.argv)

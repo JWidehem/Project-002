@@ -34,7 +34,12 @@ class Transcriber:
             "word_timestamps": False,
         }
         if glossary:
-            kwargs["initial_prompt"] = "Glossaire: " + ", ".join(glossary)
+            # Natural sentence prompt conditions Whisper better than a raw word list.
+            terms = ", ".join(t for t in glossary if len(t) <= 25)[:400]
+            kwargs["initial_prompt"] = (
+                f"Développeur français utilisant l'IA quotidiennement, dictée vocale professionnelle. "
+                f"Termes techniques: {terms}."
+            )
 
         segments, _ = self._model.transcribe(audio, **kwargs)  # type: ignore[union-attr]
 
@@ -54,8 +59,22 @@ class Transcriber:
             device, compute_type = _DEVICE_MAP.get(
                 self._compute_device, ("cpu", "int8")
             )
-            self._model = WhisperModel(
-                self._model_name,
-                device=device,
-                compute_type=compute_type,
-            )
+            try:
+                self._model = WhisperModel(
+                    self._model_name,
+                    device=device,
+                    compute_type=compute_type,
+                )
+            except Exception as exc:
+                if device != "cpu":
+                    import logging
+                    logging.warning(
+                        f"Failed to load model on {device} ({exc}); falling back to CPU."
+                    )
+                    self._model = WhisperModel(
+                        self._model_name,
+                        device="cpu",
+                        compute_type="int8",
+                    )
+                else:
+                    raise

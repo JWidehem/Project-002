@@ -18,6 +18,13 @@ _CANONICAL_MAP: dict = {
 # hold activation is deferred by this many seconds to allow the extra key to arrive.
 _HOLD_DEFER_S = 0.35
 
+# Interval at which we check whether the pynput Listener thread is still alive.
+# Windows can silently kill the low-level keyboard hook (UAC, security timeout);
+# the thread stays alive but stops delivering events.  We detect this by tracking
+# the timestamp of the last received key event and restarting if too much time
+# elapses without any event while the listener thread is still "alive".
+_WATCHDOG_INTERVAL_S = 10.0
+
 
 def _parse_hotkey(hotkey_str: str) -> frozenset:
     """Convert '<ctrl>+<shift>+<space>' to a frozenset of canonical pynput keys."""
@@ -52,6 +59,9 @@ class HotkeyManager:
         self._toggle_is_hold_superset = False  # True when toggle ⊃ hold keys
         self._lock = threading.Lock()
         self.conflict_detected = False
+        self._watchdog_timer: threading.Timer | None = None
+        self._last_event_time: float = 0.0
+        self._suspended = False
 
     def set_state(self, state: AppState) -> None:
         self._state = state
@@ -68,6 +78,8 @@ class HotkeyManager:
     def start(self) -> None:
         self.stop()
         self.conflict_detected = False
+        import time
+        self._last_event_time = time.monotonic()
         try:
             self._listener = kb.Listener(
                 on_press=self._on_press,
@@ -76,9 +88,11 @@ class HotkeyManager:
             self._listener.start()
         except (OSError, RuntimeError):
             self.conflict_detected = True
+        self._schedule_watchdog()
 
     def stop(self) -> None:
         self._cancel_hold_timer()
+        self._cancel_watchdog()
         if self._listener:
             self._listener.stop()
             self._listener = None
@@ -87,6 +101,52 @@ class HotkeyManager:
             self._hold_active = False
             self._toggle_active = False
             self._hold_pending = False
+
+    def suspend(self) -> None:
+        """Temporarily ignore all key events (call before injecting text)."""
+        with self._lock:
+            self._suspended = True
+
+    def resume(self) -> None:
+        """Resume key event processing and clear any stale pressed state."""
+        with self._lock:
+            self._suspended = False
+            self._pressed.clear()
+
+    def reset(self) -> None:
+        """Clear active/pressed state after an external cancel (error, timeout)."""
+        self._cancel_hold_timer()
+        with self._lock:
+            self._pressed.clear()
+            self._hold_active = False
+            self._toggle_active = False
+            self._hold_pending = False
+
+    def _schedule_watchdog(self) -> None:
+        t = threading.Timer(_WATCHDOG_INTERVAL_S, self._watchdog_check)
+        t.daemon = True
+        self._watchdog_timer = t
+        t.start()
+
+    def _cancel_watchdog(self) -> None:
+        t = self._watchdog_timer
+        self._watchdog_timer = None
+        if t is not None:
+            t.cancel()
+
+    def _watchdog_check(self) -> None:
+        """Periodic check: restart listener if its thread has died."""
+        import logging, time
+        restart = False
+        with self._lock:
+            listener = self._listener
+        if listener is not None and not listener.is_alive():
+            logging.warning("HotkeyManager: listener thread died — restarting")
+            restart = True
+        if restart:
+            self.start()  # also schedules next watchdog
+            return
+        self._schedule_watchdog()  # reschedule
 
     # --- Internal helpers ---
 
@@ -114,6 +174,11 @@ class HotkeyManager:
     # --- Listener callbacks ---
 
     def _on_press(self, key) -> None:
+        import time
+        self._last_event_time = time.monotonic()
+        with self._lock:
+            if self._suspended:
+                return
         # Escape cancels any active recording or transcription immediately.
         if key == kb.Key.esc:
             if self._state and self._state.current() in (AppState.RECORDING, AppState.TRANSCRIBING):
@@ -131,6 +196,21 @@ class HotkeyManager:
         timer_to_start = None
 
         with self._lock:
+            # Self-heal: if hold/pending is stuck True but app is already IDLE,
+            # a key-up event was swallowed by the OS (e.g. Alt+Tab, Win+D).
+            if (self._hold_active or self._hold_pending) and \
+                    self._state is not None and self._state.current() == AppState.IDLE:
+                timer_to_cancel = self._hold_defer_timer
+                self._hold_defer_timer = None
+                self._hold_pending = False
+                self._hold_active = False
+                self._pressed.clear()
+            elif not self._hold_active and not self._hold_pending and not self._toggle_active:
+                # Pure IDLE: remove stale non-combo keys (missed OS key-up events)
+                combo_keys = self._hold_keys | self._toggle_keys
+                stale = frozenset(k for k in self._pressed if k not in combo_keys)
+                if stale:
+                    self._pressed -= stale
             self._pressed.add(key)
             current_set = frozenset(self._pressed)
 
@@ -186,6 +266,9 @@ class HotkeyManager:
             self._on_toggle_stop()
 
     def _on_release(self, key) -> None:
+        with self._lock:
+            if self._suspended:
+                return
         key = self._canonical(key)
         release_hold = False
         timer_to_cancel = None
@@ -208,6 +291,12 @@ class HotkeyManager:
             self._on_hold_release()
 
     def _on_hold_press(self) -> None:
+        # Guard against the race where _on_release fires between _hold_timer_fired
+        # releasing the lock and this call: if _hold_active was already cleared,
+        # don't start (avoids state stuck in RECORDING with _hold_active=False).
+        with self._lock:
+            if not self._hold_active:
+                return
         self._on_start()
 
     def _on_hold_release(self) -> None:

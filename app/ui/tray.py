@@ -38,7 +38,7 @@ def _make_icon(state: str) -> QIcon:
 
 
 class TrayIcon(QSystemTrayIcon):
-    def __init__(self, on_open, on_history, on_settings, on_quit) -> None:
+    def __init__(self, on_open, on_history, on_settings, on_export, on_quit) -> None:
         super().__init__(_make_icon(AppState.IDLE))
         self.setToolTip("WhisperFlow — Idle")
         self.show()
@@ -47,6 +47,7 @@ class TrayIcon(QSystemTrayIcon):
         menu.addAction("🖥  Ouvrir WhisperFlow", on_open)
         menu.addSeparator()
         menu.addAction("📋 Historique", on_history)
+        menu.addAction("📤 Exporter l'historique…", on_export)
         menu.addAction("⚙️ Réglages", on_settings)
         menu.addSeparator()
         menu.addAction("🚪 Quitter", on_quit)

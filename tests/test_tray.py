@@ -7,10 +7,12 @@ from app.engine.state import AppState
 @pytest.fixture
 def tray(qapp):
     from app.ui.tray import TrayIcon
+    on_open = MagicMock()
     on_history = MagicMock()
     on_settings = MagicMock()
+    on_export = MagicMock()
     on_quit = MagicMock()
-    t = TrayIcon(on_history=on_history, on_settings=on_settings, on_quit=on_quit)
+    t = TrayIcon(on_open=on_open, on_history=on_history, on_settings=on_settings, on_export=on_export, on_quit=on_quit)
     yield t
     t.hide()
 
@@ -24,6 +26,7 @@ def test_tray_has_context_menu(tray):
     assert menu is not None
     actions = [a.text() for a in menu.actions() if not a.isSeparator()]
     assert any("Historique" in a for a in actions)
+    assert any("Exporter" in a for a in actions)
     assert any("Réglages" in a for a in actions)
     assert any("Quitter" in a for a in actions)
 

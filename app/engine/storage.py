@@ -83,3 +83,20 @@ class History:
     def delete(self, entry_id: int) -> None:
         with self._connect() as con:
             con.execute("DELETE FROM history WHERE id = ?", (entry_id,))
+
+    def export_csv(self, dest_path: Path) -> int:
+        """Write all history entries to a CSV file. Returns number of rows written."""
+        import csv
+        entries = self.list()  # newest first
+        entries_asc = list(reversed(entries))
+        with open(dest_path, "w", newline="", encoding="utf-8-sig") as f:
+            writer = csv.writer(f, delimiter=";")
+            writer.writerow(["date", "durée_s", "brut", "nettoyé"])
+            for e in entries_asc:
+                writer.writerow([
+                    e["created_at"],
+                    f"{e['duration_s']:.1f}",
+                    e["raw_text"],
+                    e["clean_text"],
+                ])
+        return len(entries_asc)

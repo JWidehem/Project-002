@@ -71,3 +71,25 @@ def test_history_rotation_at_500(history):
     assert len(entries) == 500
     # newest are kept
     assert entries[0]["clean_text"] == "c504"
+
+
+def test_export_csv_creates_file(history, tmp_path):
+    history.save(raw="euh bonjour monde", clean="bonjour monde", duration=1.5)
+    history.save(raw="euh merci", clean="merci", duration=0.8)
+    dest = tmp_path / "export.csv"
+    count = history.export_csv(dest)
+    assert count == 2
+    assert dest.exists()
+    lines = dest.read_text(encoding="utf-8-sig").splitlines()
+    assert lines[0] == "date;durée_s;brut;nettoyé"
+    assert "bonjour monde" in lines[1]  # oldest first
+    assert "merci" in lines[2]
+
+
+def test_export_csv_empty_history(history, tmp_path):
+    dest = tmp_path / "export_empty.csv"
+    count = history.export_csv(dest)
+    assert count == 0
+    lines = dest.read_text(encoding="utf-8-sig").splitlines()
+    assert lines[0] == "date;durée_s;brut;nettoyé"
+    assert len(lines) == 1

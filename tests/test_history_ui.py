@@ -13,24 +13,36 @@ SAMPLE_ENTRIES = [
 def history_win(qapp):
     from app.ui.history import HistoryWindow
     on_delete = MagicMock()
-    win = HistoryWindow(entries=SAMPLE_ENTRIES, on_delete=on_delete)
-    yield win, on_delete
+    on_export = MagicMock()
+    win = HistoryWindow(entries=SAMPLE_ENTRIES, on_delete=on_delete, on_export=on_export)
+    yield win, on_delete, on_export
     win.close()
 
 
 def test_history_window_shows_entries(history_win):
-    win, _ = history_win
+    win, _, _ = history_win
     assert win.list_widget.count() == len(SAMPLE_ENTRIES)
 
 
 def test_history_window_newest_first(history_win):
-    win, _ = history_win
+    win, _, _ = history_win
     first_item = win.list_widget.item(0).text()
     assert "deuxième" in first_item
 
 
 def test_history_refresh_updates_list(history_win):
-    win, _ = history_win
+    win, _, _ = history_win
     new_entries = [{"id": 3, "created_at": "2026-03-12 16:00:00", "clean_text": "troisième", "duration_s": 1.0}]
     win.refresh(new_entries)
     assert win.list_widget.count() == 1
+
+
+def test_history_export_btn_visible(history_win):
+    win, _, _ = history_win
+    assert not win.export_btn.isHidden()
+
+
+def test_history_export_btn_calls_callback(history_win):
+    win, _, on_export = history_win
+    win.export_btn.click()
+    on_export.assert_called_once()
