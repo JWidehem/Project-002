@@ -110,7 +110,7 @@ def test_self_heal_when_hold_active_stuck_and_state_idle(callbacks, mock_state, 
 
 
 def test_reset_clears_hotkey_state(callbacks, mocker):
-    """reset() clears _hold_active, _toggle_active, _pressed."""
+    """reset() clears _hold_active, _latch_active, _pressed."""
     mocker.patch("app.engine.hotkeys.kb.Listener")
     from pynput.keyboard import Key
     from app.engine.hotkeys import HotkeyManager
@@ -118,11 +118,71 @@ def test_reset_clears_hotkey_state(callbacks, mocker):
     mgr = HotkeyManager(**callbacks)
     mgr.configure("<ctrl>+<shift>+<space>", "<ctrl>+<shift>+d")
     mgr._hold_active = True
-    mgr._toggle_active = True
+    mgr._latch_active = True
     mgr._pressed = {Key.ctrl}
 
     mgr.reset()
 
     assert mgr._hold_active is False
-    assert mgr._toggle_active is False
+    assert mgr._latch_active is False
     assert len(mgr._pressed) == 0
+
+
+def test_space_during_hold_latches_to_handsfree(callbacks, mocker):
+    """Pressing the latch key (Space) while hold is active latches into hands-free mode."""
+    mocker.patch("app.engine.hotkeys.kb.Listener")
+    from pynput.keyboard import Key
+    from app.engine.hotkeys import HotkeyManager
+
+    mgr = HotkeyManager(**callbacks)
+    mgr.configure("<ctrl>+<alt>", "<ctrl>+<alt>+<space>")
+
+    # Start hold recording (Ctrl+Alt)
+    mgr._on_press(Key.ctrl)
+    mgr._on_press(Key.alt)
+    callbacks["on_start"].assert_called_once()
+    assert mgr._hold_active is True
+
+    # Press Space during hold → should latch silently (no extra on_start call)
+    mgr._on_press(Key.space)
+    assert mgr._hold_active is False
+    assert mgr._latch_active is True
+    callbacks["on_start"].assert_called_once()  # still only one call
+
+
+def test_space_in_latch_mode_stops_recording(callbacks, mock_state, mocker):
+    """Pressing the latch key (Space) in hands-free mode calls on_stop."""
+    mocker.patch("app.engine.hotkeys.kb.Listener")
+    from pynput.keyboard import Key
+    from app.engine.state import AppState
+    from app.engine.hotkeys import HotkeyManager
+
+    mock_state.current.return_value = AppState.RECORDING
+    mgr = HotkeyManager(**callbacks)
+    mgr.configure("<ctrl>+<alt>", "<ctrl>+<alt>+<space>")
+    mgr.set_state(mock_state)
+
+    # Simulate latched state
+    mgr._latch_active = True
+
+    mgr._on_press(Key.space)
+    callbacks["on_stop"].assert_called_once()
+    assert mgr._latch_active is False
+
+
+def test_hold_release_without_latch_stops_recording(callbacks, mocker):
+    """Releasing hold keys without latching triggers on_stop (normal push-to-talk)."""
+    mocker.patch("app.engine.hotkeys.kb.Listener")
+    from pynput.keyboard import Key
+    from app.engine.hotkeys import HotkeyManager
+
+    mgr = HotkeyManager(**callbacks)
+    mgr.configure("<ctrl>+<alt>", "<ctrl>+<alt>+<space>")
+
+    # Full push-to-talk sequence: press, then release without Space
+    mgr._on_press(Key.ctrl)
+    mgr._on_press(Key.alt)
+    assert mgr._hold_active is True
+    mgr._on_release(Key.ctrl)
+    callbacks["on_stop"].assert_called_once()
+    assert mgr._hold_active is False

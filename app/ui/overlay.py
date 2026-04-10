@@ -16,6 +16,7 @@ class Overlay(QWidget):
         self._rms_queue = rms_queue
         self._rms_values: list[float] = [0.0] * BAR_COUNT
         self._state = AppState.IDLE
+        self._latch_mode = False   # True when recording is latched (hands-free)
         self._spinner_angle = 0
         self._bar_tick = 0
 
@@ -45,11 +46,18 @@ class Overlay(QWidget):
 
     def on_state_change(self, new_state: str) -> None:
         self._state = new_state
+        if new_state != AppState.RECORDING:
+            self._latch_mode = False  # reset on any exit from recording
         if new_state == AppState.IDLE:
             self.hide()
         else:
             self._position_on_active_screen()
             self.show()
+        self.update()
+
+    def set_latch(self, active: bool) -> None:
+        """Called from hotkey thread — safe because bool assignment is atomic."""
+        self._latch_mode = active
         self.update()
 
     def _tick(self) -> None:
@@ -90,11 +98,19 @@ class Overlay(QWidget):
             self._draw_transcribing(painter)
 
     def _draw_recording(self, painter: QPainter) -> None:
-        # Gold dot on the left
+        # Amber in latch (hands-free) mode, gold in normal hold mode
+        if self._latch_mode:
+            dot_color = QColor(218, 148, 60)   # warm copper-amber
+            bar_color = QColor(210, 140, 60)
+        else:
+            dot_color = QColor(232, 201, 106)  # gold
+            bar_color = QColor(201, 168, 76)
+
+        # Dot on the left
         dot_r = 4
         dot_x = 10
         dot_y = H // 2
-        painter.setBrush(QColor(232, 201, 106))
+        painter.setBrush(dot_color)
         painter.setPen(Qt.PenStyle.NoPen)
         painter.drawEllipse(QPoint(dot_x, dot_y), dot_r, dot_r)
 
@@ -104,7 +120,6 @@ class Overlay(QWidget):
         bar_area_x = dot_x + dot_r + 6
         bar_area_w = W - bar_area_x - 6
         spacing = max(1, (bar_area_w - BAR_COUNT * bar_w) // (BAR_COUNT + 1))
-        bar_color = QColor(201, 168, 76)
         painter.setBrush(bar_color)
         painter.setPen(Qt.PenStyle.NoPen)
         max_bar_h = H - 8

@@ -169,6 +169,7 @@ class App:
             on_start=self._start_recording,
             on_stop=self._stop_recording,
             on_cancel=self._cancel,
+            on_latch=self._overlay.set_latch,
         )
         self._hotkeys.set_state(self._state)
         self._hotkeys.configure(
