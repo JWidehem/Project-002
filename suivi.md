@@ -7,6 +7,33 @@
 
 ---
 
+## Routine de maintenance mensuelle
+
+> **Pour l'agent LLM qui relit ce fichier :** exécute les commandes ci-dessous dans l'ordre,
+> analyse les résultats, et signale à Jimmy ce qui nécessite une action.
+
+```powershell
+cd "D:\Project-002"
+
+# 1. Audit sécurité — CVE connues dans les packages installés
+python -m pip_audit --path .\.venv --desc
+
+# 2. Packages obsolètes — versions disponibles vs installées
+.\.venv\Scripts\python.exe -m pip list --outdated
+
+# 3. Tests — vérifier que tout passe toujours
+.\.venv\Scripts\python.exe -m pytest tests/ -q
+```
+
+**Interprétation attendue :**
+- `pip-audit` : si une CVE est trouvée → signaler le package, la CVE et la version corrigée
+- `pip list --outdated` : signaler uniquement les packages du `requirements.txt` (ignorer les dépendances transitives)
+- `pytest` : si un test échoue → le signaler avec le traceback
+
+**Seuil d'action :** ne revenir sur VS Code que si CVE critique, ou si un package direct du `requirements.txt` a une mise à jour majeure (ex: PyQt6 6.x → 7.x, faster-whisper 1.x → 2.x).
+
+---
+
 ## Lancement
 
 ```bash
