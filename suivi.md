@@ -3,7 +3,7 @@
 > Application desktop Windows de dictée vocale locale (sans cloud, sans LLM, sans écoute permanente).
 > Usage : perso uniquement — Jimmy.
 > Objectif : maintenir l'app stable, pas d'ajout de features sauf demande explicite.
-> Dernière mise à jour : 2026-04-10 — **v2.0 — latch overlay + Python 3.14**
+> Dernière mise à jour : 2026-07-22 — **v2.1 — import audio fichier**
 
 ---
 
@@ -39,7 +39,7 @@ python -m pip_audit --path .\.venv --desc
 ```bash
 pythonw main.py          # production (sans console)
 python main.py           # debug (avec console)
-pytest tests/ -v         # tests (81/81)
+pytest tests/ -v         # tests (85/85)
 ```
 
 ## Environnement
@@ -143,7 +143,7 @@ Auto-guerison : si _hold_active=True mais etat=IDLE (key-up avale par l'OS), le 
 
 | Onglet | Contenu |
 |---|---|
-| Accueil | Bento 3 colonnes : horloge live (QLocale fr), stats mots/WPM/jours depuis history.db, mini-historique 15 entrees |
+| Accueil | Bento 3 colonnes : horloge live, stats mots/WPM/jours, mini-historique (haut) + carte Import Audio (bas) |
 | Historique | Liste searchable 2 lignes/entree, copie/suppression/export CSV, compteur live |
 | Reglages | 5 sections scrollables + footer fixe : Dictee, Raccourcis, Modele ASR, Nettoyage, General |
 | Performances | Stats live CPU/RAM/GPU/VRAM (psutil + pynvml), profil materiel, recommandation modele |
@@ -157,6 +157,8 @@ Auto-guerison : si _hold_active=True mais etat=IDLE (key-up avale par l'OS), le 
 | HotkeyCapture | settings.py | QPushButton capturant les combos clavier en live |
 | _HoverTip | main_window.py | Popup glassmorphism singleton (hover tuiles perf) |
 | Overlay | overlay.py | or en hold, ambre en latch, spinner en transcription |
+| _ImportAudioCard | home_tab.py | Carte bento import fichier audio — browse, transcrire, annuler |
+| _TranscriptResultDialog | home_tab.py | Dialog glassmorphism draggable — texte scrollable, copier, enregistrer |
 
 **Icones** : toutes dessinées en QPainter — aucun fichier image externe sauf assets/logo00.png et assets/background00.png.
 
@@ -185,7 +187,7 @@ app/engine/
   state.py               # AppState IDLE/RECORDING/TRANSCRIBING
   storage.py             # Settings (JSON) + History (SQLite)
   audio.py               # AudioCapture, normalisation RMS
-  transcription.py       # Transcriber (faster-whisper, lazy-load, cancel)
+  transcription.py       # Transcriber (faster-whisper, lazy-load, cancel, transcribe_file)
   cleanup.py             # Nettoyage texte 3 niveaux
   injector.py            # clipboard + Ctrl+V
   hotkeys.py             # HotkeyManager — hold + latch
@@ -193,7 +195,7 @@ app/engine/
 app/ui/
   main_window.py         # Fenetre principale — 4 onglets, _rebuild_bg_cache
   glass_card.py          # GlassCard reutilisable
-  home_tab.py            # Onglet Accueil (bento)
+  home_tab.py            # Onglet Accueil (bento) + _ImportAudioCard + _TranscriptResultDialog
   perf_tab.py            # Onglet Performances (stats live)
   overlay.py             # Indicateur enregistrement (or/ambre/spinner)
   settings.py            # Onglet Reglages
@@ -228,6 +230,7 @@ data/                    # Cree au 1er lancement (gitignored)
 
 | Version | Date | Resume |
 |---|---|---|
+| v2.1 | 2026-07-22 | Import fichier audio (mp3/m4a/aac/wav…) : transcribe_file(), _ImportAudioCard, _TranscriptResultDialog, 85/85 tests |
 | v2.0 | 2026-04-10 | Logique latch (Space pendant hold = mains libres), indicateur overlay ambre, Python 3.14, numpy>=2.0 |
 | v1.9 | 2026-03-15 | Fix hotkey stuck (auto-guerison + reset()), 78/78 tests |
 | v1.8 | 2026-03-15 | Export CSV, gestion micro deconnecte, timeout 90s, decoupage main_window.py |
