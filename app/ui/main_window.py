@@ -91,13 +91,15 @@ class _TitleBar(QWidget):
 
 class MainWindow(QMainWindow):
     def __init__(self, settings: dict, on_save_settings, history_store,
-                 on_record_toggle=None, on_export=None) -> None:
+                 on_record_toggle=None, on_export=None,
+                 on_transcribe_file=None) -> None:
         super().__init__()
         self._settings = settings
         self._on_save_settings = on_save_settings
         self._history_store = history_store
         self._on_record_toggle = on_record_toggle  # callable(current_state) -> None
         self._on_export = on_export
+        self._on_transcribe_file = on_transcribe_file
 
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Window)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
@@ -279,7 +281,7 @@ class MainWindow(QMainWindow):
 
     def _make_home_tab(self) -> QWidget:
         from app.ui.home_tab import build_home_tab
-        return build_home_tab(self)
+        return build_home_tab(self, on_transcribe_file=self._on_transcribe_file)
     def _make_history_tab(self) -> QWidget:
         self._history_widget = HistoryWidget(
             entries=self._history_store.list(),

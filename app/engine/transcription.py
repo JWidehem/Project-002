@@ -48,6 +48,45 @@ class Transcriber:
 
         return " ".join(s.text for s in segments).strip()
 
+    def transcribe_file(
+        self,
+        path: str,
+        language: str = "fr",
+        glossary: list[str] | None = None,
+    ) -> str | None:
+        """Transcribe an audio file (mp3, m4a, aac, wav, ogg, …).
+
+        faster-whisper handles file loading internally via ffmpeg.
+        Cancellation is checked between each segment so long files can be
+        interrupted cleanly.
+        """
+        if self._cancel_event.is_set():
+            return None
+
+        self._ensure_loaded()
+
+        kwargs: dict = {
+            "language": language,
+            "vad_filter": True,
+            "word_timestamps": False,
+        }
+        if glossary:
+            terms = ", ".join(t for t in glossary if len(t) <= 25)[:400]
+            kwargs["initial_prompt"] = (
+                f"Développeur français utilisant l'IA quotidiennement, dictée vocale professionnelle. "
+                f"Termes techniques: {terms}."
+            )
+
+        segments, _ = self._model.transcribe(str(path), **kwargs)  # type: ignore[union-attr]
+
+        parts: list[str] = []
+        for s in segments:
+            if self._cancel_event.is_set():
+                return None
+            parts.append(s.text)
+
+        return " ".join(parts).strip() or None
+
     def cancel(self) -> None:
         self._cancel_event.set()
 

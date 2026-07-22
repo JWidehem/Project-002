@@ -155,6 +155,7 @@ class App:
             history_store=self._history_store,
             on_record_toggle=self._toggle_recording,
             on_export=self._export_history,
+            on_transcribe_file=self._transcribe_audio_file,
         )
 
         self._tray = TrayIcon(
@@ -284,6 +285,34 @@ class App:
 
         threading.Thread(target=_worker, daemon=True).start()
         threading.Thread(target=_timeout_check, daemon=True).start()
+
+    def _transcribe_audio_file(self, path: str, signals) -> callable:
+        """Transcribe an audio file in a background thread.
+
+        Returns a cancel callable so the UI card can abort the job.
+        """
+        if self._state.current() != AppState.IDLE:
+            signals.error.emit("L'application est en cours d'enregistrement ou de transcription.")
+            return lambda: None
+
+        self._transcriber.reset_cancel()
+        logging.info(f"File transcription started: {path}")
+
+        def _worker():
+            try:
+                text = self._transcriber.transcribe_file(
+                    path,
+                    language=self._settings["language"],
+                    glossary=self._settings.get("glossary", []),
+                )
+                logging.info(f"File transcription done: {len(text or '')} chars")
+                signals.done.emit(text or "")
+            except Exception as e:
+                logging.error(f"File transcription error: {e}", exc_info=True)
+                signals.error.emit(str(e))
+
+        threading.Thread(target=_worker, daemon=True).start()
+        return self._transcriber.cancel
 
     def _cancel(self) -> None:
         self._transcriber.cancel()
