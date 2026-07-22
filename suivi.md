@@ -39,7 +39,7 @@ python -m pip_audit --path .\.venv --desc
 ```bash
 pythonw main.py          # production (sans console)
 python main.py           # debug (avec console)
-pytest tests/ -v         # tests (85/85)
+pytest tests/ -v         # tests (87/87)
 ```
 
 ## Environnement
@@ -230,7 +230,7 @@ data/                    # Cree au 1er lancement (gitignored)
 
 | Version | Date | Resume |
 |---|---|---|
-| v2.1 | 2026-07-22 | Import fichier audio (mp3/m4a/aac/wav…) : transcribe_file(), _ImportAudioCard, _TranscriptResultDialog, 85/85 tests |
+| v2.1 | 2026-07-22 | Import fichier audio (mp3/m4a/aac/wav…) : transcribe_file(), progression live %, _ImportAudioCard, _TranscriptResultDialog, 87/87 tests |
 | v2.0 | 2026-04-10 | Logique latch (Space pendant hold = mains libres), indicateur overlay ambre, Python 3.14, numpy>=2.0 |
 | v1.9 | 2026-03-15 | Fix hotkey stuck (auto-guerison + reset()), 78/78 tests |
 | v1.8 | 2026-03-15 | Export CSV, gestion micro deconnecte, timeout 90s, decoupage main_window.py |
