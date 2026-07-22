@@ -24,8 +24,9 @@ from app.ui.glass_card import GlassCard
 
 class _FileWorkerSignals(QObject):
     """Thread-safe signals for file transcription worker."""
-    done  = pyqtSignal(str)   # emitted with full text on success
-    error = pyqtSignal(str)   # emitted with error message on failure
+    done     = pyqtSignal(str)   # emitted with full text on success
+    error    = pyqtSignal(str)   # emitted with error message on failure
+    progress = pyqtSignal(int)   # 0-99, percentage of audio processed
 
 
 class _WaveformIcon(QWidget):
@@ -351,6 +352,7 @@ class _ImportAudioCard(GlassCard):
         signals = _FileWorkerSignals()
         signals.done.connect(self._on_done)
         signals.error.connect(self._on_error)
+        signals.progress.connect(self._on_progress)
 
         self._cancel_fn = self._on_transcribe_file(self._file_path, signals)
 
@@ -363,9 +365,13 @@ class _ImportAudioCard(GlassCard):
             "color: rgba(201,168,76,0.75); font-size:10px; background:transparent;"
         )
 
+    def _on_progress(self, pct: int) -> None:
+        self._file_lbl.setText(f"Transcription en cours\u2026 {pct} %")
+
     def _on_done(self, text: str) -> None:
         self._cancel_fn = None
         fname = Path(self._file_path).name if self._file_path else "audio"
+        self._file_path = None          # reset → bouton reviendra à « Choisir un fichier »
         self._reset_idle()
         dlg = _TranscriptResultDialog(fname, text, parent=self.window())
         dlg.exec()
@@ -386,6 +392,7 @@ class _ImportAudioCard(GlassCard):
         else:
             self._action_btn.setText("Choisir un fichier")
             self._action_btn.setStyleSheet(self._style_browse())
+            self._file_lbl.setText("Aucun fichier sélectionné")
         self._file_lbl.setStyleSheet(
             "color: rgba(255,255,255,0.38); font-size:10px; background:transparent;"
         )

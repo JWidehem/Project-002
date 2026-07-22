@@ -304,6 +304,7 @@ class App:
                     path,
                     language=self._settings["language"],
                     glossary=self._settings.get("glossary", []),
+                    progress_callback=signals.progress.emit,
                 )
                 logging.info(f"File transcription done: {len(text or '')} chars")
                 signals.done.emit(text or "")

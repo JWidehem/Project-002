@@ -53,12 +53,17 @@ class Transcriber:
         path: str,
         language: str = "fr",
         glossary: list[str] | None = None,
+        progress_callback=None,
     ) -> str | None:
         """Transcribe an audio file (mp3, m4a, aac, wav, ogg, …).
 
         faster-whisper handles file loading internally via ffmpeg.
         Cancellation is checked between each segment so long files can be
         interrupted cleanly.
+
+        progress_callback: optional callable(percent: int) called after each
+        segment with a value in [0, 99].  Callers should treat the *done*
+        signal as the definitive 100 % marker.
         """
         if self._cancel_event.is_set():
             return None
@@ -77,13 +82,16 @@ class Transcriber:
                 f"Termes techniques: {terms}."
             )
 
-        segments, _ = self._model.transcribe(str(path), **kwargs)  # type: ignore[union-attr]
+        segments, info = self._model.transcribe(str(path), **kwargs)  # type: ignore[union-attr]
+        total = max(info.duration, 1.0)
 
         parts: list[str] = []
         for s in segments:
             if self._cancel_event.is_set():
                 return None
             parts.append(s.text)
+            if progress_callback is not None:
+                progress_callback(min(int(s.end / total * 100), 99))
 
         return " ".join(parts).strip() or None
 

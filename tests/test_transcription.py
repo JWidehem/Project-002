@@ -10,7 +10,10 @@ def mock_whisper_model():
         instance = MockModel.return_value
         seg = MagicMock()
         seg.text = " bonjour"
-        instance.transcribe.return_value = ([seg], MagicMock())
+        seg.end = 1.0
+        info = MagicMock()
+        info.duration = 2.0
+        instance.transcribe.return_value = ([seg], info)
         yield instance
 
 
@@ -100,13 +103,14 @@ def test_transcribe_file_cancel_mid_segments():
 
         # Build a generator that sets cancel after first segment
         def _gen():
-            seg1 = MagicMock(); seg1.text = " hello"
+            seg1 = MagicMock(); seg1.text = " hello"; seg1.end = 5.0
             yield seg1
             t.cancel()
-            seg2 = MagicMock(); seg2.text = " world"
+            seg2 = MagicMock(); seg2.text = " world"; seg2.end = 10.0
             yield seg2
 
-        instance.transcribe.return_value = (_gen(), MagicMock())
+        info = MagicMock(); info.duration = 20.0
+        instance.transcribe.return_value = (_gen(), info)
         result = t.transcribe_file("long.aac", language="fr")
         # Cancelled mid-way → None
         assert result is None
@@ -118,3 +122,37 @@ def test_transcribe_file_passes_glossary(mock_whisper_model):
     t.transcribe_file("meeting.aac", language="fr", glossary=["CRM", "ERP"])
     call_kwargs = mock_whisper_model.transcribe.call_args[1]
     assert "CRM" in call_kwargs["initial_prompt"]
+
+
+def test_transcribe_file_progress_callback(mock_whisper_model):
+    """progress_callback is called with increasing percentages per segment."""
+    from app.engine.transcription import Transcriber
+    from unittest.mock import MagicMock
+
+    # Return two segments with timestamps + info with duration
+    seg1 = MagicMock(); seg1.text = " hello"; seg1.end = 5.0
+    seg2 = MagicMock(); seg2.text = " world"; seg2.end = 10.0
+    info  = MagicMock(); info.duration = 20.0
+    mock_whisper_model.transcribe.return_value = ([seg1, seg2], info)
+
+    t = Transcriber("small")
+    calls = []
+    t.transcribe_file("meeting.aac", language="fr", progress_callback=calls.append)
+
+    assert calls == [25, 50]   # 5/20=25%, 10/20=50%
+
+
+def test_transcribe_file_progress_capped_at_99(mock_whisper_model):
+    """progress never exceeds 99 even if segment.end >= duration."""
+    from app.engine.transcription import Transcriber
+    from unittest.mock import MagicMock
+
+    seg = MagicMock(); seg.text = " bonjour"; seg.end = 30.0
+    info = MagicMock(); info.duration = 10.0   # seg.end > duration edge case
+    mock_whisper_model.transcribe.return_value = ([seg], info)
+
+    t = Transcriber("small")
+    calls = []
+    t.transcribe_file("meeting.aac", language="fr", progress_callback=calls.append)
+
+    assert calls == [99]
